@@ -84,6 +84,9 @@ data Context
    , _len :: Int
    }
 
+emptyCtx :: Context
+emptyCtx = Context VNil TyNil [] [] 0
+
 data NameOrigin = NOSource | NOInserted
   deriving (Eq,Ord,Show,Read,Bounded,Enum)
 

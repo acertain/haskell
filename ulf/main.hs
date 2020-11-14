@@ -1,18 +1,40 @@
 {-# Language BlockArguments #-}
+{-# language ScopedTypeVariables #-}
 
-import Control.Monad (join)
+import Control.Monad
 import Options.Applicative
+import Source.Parser (src)
+import Control.Exception
+import Text.Megaparsec (parse, errorBundlePretty)
+import System.Exit
+import Elaborate.Check (infer)
+import Elaborate.Value (emptyCtx)
 
 type Command = ParserInfo (IO ())
 
+checkFile :: FilePath -> Bool -> IO Bool
+checkFile p _ = readFile p >>= \txt ->
+  case parse src p txt of
+    Left e -> do
+      putStrLn $ errorBundlePretty e
+      pure False
+    Right r -> do
+      _ <- infer emptyCtx r
+      pure True
+
 runCheck :: [FilePath] -> Bool -> IO ()
-runCheck _ _ = putStrLn "checking"
+runCheck fs el = do
+  bs <- forM fs (\x -> checkFile x el `catch` (\(e :: SomeException) -> do
+    putStrLn $ "Error while checking " ++ x ++ ":"
+    putStrLn $ displayException e
+    pure False))
+  when (not $ and bs) $ exitFailure
 
 runServer :: IO ()
 runServer = putStrLn "serving"
 
 checkCommand :: Command
-checkCommand = info (helper <*> (runCheck <$> many file <*> elaborate))
+checkCommand = info (helper <*> (runCheck <$> some file <*> elaborate))
    $ fullDesc
   <> progDesc "Type check a program"
   <> header "ergo check"
