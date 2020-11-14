@@ -50,6 +50,33 @@ insert cxt act = act >>= \case
   (t@(Lam _ Implicit _ _), va) -> pure (t, va)
   (t                     , va) -> insert' cxt (pure (t, va))
 
+
+-- (fn, dom, cod)
+expectFn :: Context -> Raw.Term -> Icit -> IO (TM, VTy, EVTy)
+expectFn cxt tm i = do
+  (t, va) <- case i of
+    -- fcif uses insert' here for agda parity
+    -- > For example (λ{A} x. id {A} x) U is elaborated to (λ{A} x. id {A} x) {U} U
+    -- but insert would be fine too imo
+    Explicit -> insert' cxt $ infer cxt tm
+    _        -> infer cxt tm
+  force va >>= \case
+    VPi _ i' a b -> do
+      unless (i == i') $ report (cxt^.names) $ IcitMismatch i i'
+      pure (t, a, b)
+    va'@(VNe (HMeta _) _) -> do
+      (m',a0) <- freshMeta' cxt VU
+      a <- eval (cxt^.vals) a0
+      let x = metaName m'
+      c <- freshMeta (bind x NOInserted a cxt) VU
+      let b x' = eval (VDef (cxt^.vals) x') c
+      unifyWhile cxt va' (VPi x i a b)
+      pure (t, a, b)
+    _ -> do
+      r <- unsafeInterleaveIO (uneval (cxt^.len) va)
+      report (cxt^.names) $ ExpectedFunction r
+
+
 infer :: Context -> Raw.Term -> IO (TM, VTy)
 infer cxt = \case
   Raw.Loc p t -> addSourcePos p (infer cxt t)
@@ -71,29 +98,10 @@ infer cxt = \case
     pure (Pi (sourceName x) i a' b', VU)
 
   Raw.App i t0 u -> do
-    (t, va) <- case i of 
-      Explicit -> insert' cxt $ infer cxt t0
-      _        -> infer cxt t0
-    force va >>= \case
-      VPi _ i' a b -> do
-        unless (i == i') $
-          report (cxt^.names) $ IcitMismatch i i'
-        u' <- check cxt u a
-        o <- eval (cxt^.vals) u' >>= b
-        pure (App i t u', o)
-      VNe (HMeta m) sp -> do
-        (m',a0) <- freshMeta' cxt VU 
-        a <- eval (cxt^.vals) a0
-        let x = metaName m'
-        c <- freshMeta (bind x NOInserted a cxt) VU
-        let b x' = eval (VDef (cxt^.vals) x') c
-        unifyWhile cxt (VNe (HMeta m) sp) (VPi x i a b)
-        u' <- check cxt u a
-        ty <- eval (cxt^.vals) u' >>= b
-        pure (App i t u', ty)
-      _ -> do
-        r <- unsafeInterleaveIO (uneval (cxt^.len) va)
-        report (cxt^.names) $ ExpectedFunction r
+    (t, a, b) <- expectFn cxt t0 i
+    u' <- check cxt u a
+    ty <- eval (cxt^.vals) u' >>= b
+    pure (App i t u', ty)
 
   Raw.Lam (sourceName -> x) ann i t -> do
     a <- case ann of
