@@ -1,3 +1,5 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# Language CPP #-}
 {-# Language PatternSynonyms #-}
 {-# Language MonoLocalBinds #-}
@@ -22,6 +24,9 @@ import Data.HashSet
 import Data.IORef
 import GHC.Exception
 import GHC.Stack.Types
+import Control.Monad.State
+import Data.SBV.Trans.Control (Query, getValue, queryState, QueryT)
+import Data.SBV.Trans ((.||), MonadSymbolic(..), (.&&), sNot, sBool, constrain, sFalse, sTrue, SBool)
 
 panic :: HasCallStack => a
 panic = throw (errorCallWithCallStackException "impossible" ?callStack)
@@ -34,6 +39,9 @@ instance Eq Meta where
 instance Hashable Meta where
   hash (MetaRef h _) = hash h
   hashWithSalt d (MetaRef h _) = hashWithSalt d h
+
+instance Show Meta where
+  show (MetaRef u _) = "_"
 
 newMeta :: MetaEntry -> IO Meta
 newMeta m = MetaRef <$> newUnique <*> newIORef m
@@ -87,6 +95,54 @@ data Context
 emptyCtx :: Context
 emptyCtx = Context VNil TyNil [] [] 0
 
+data Q = E | L | A | R | U | S deriving (Show)
+
+data Qty = Qty SBool SBool SBool
+
+type Qtys = [Qty]
+
+newtype M a = M (StateT Qtys Query a)
+  deriving (Functor, Applicative, Monad, MonadIO)
+
+knownQty :: Q -> Qty
+knownQty = \case
+  E -> Qty z o z
+  L -> Qty o o o
+  A -> Qty z z o
+  U -> Qty z z z
+  S -> Qty o z z
+  R -> Qty o o z
+  where 
+    o = sTrue
+    z = sFalse
+
+qtyVar :: M Qty
+qtyVar = M $ do
+  x <- sBool "x"
+  y <- sBool "y"
+  z <- sBool "z"
+  lift $ do
+    constrain $ sNot (z .&& y .&& sNot x)
+    constrain $ sNot (z .&& sNot y .&& x)
+  pure (Qty x y z)
+
+qtyVal :: Qty -> M Q
+qtyVal (Qty x y z) = M $ ((,,) <$> getValue x <*> getValue y <*> getValue z) <&> \case
+  (False, True, False)  -> E
+  (True, True, True)    -> L
+  (False, False, True)  -> A
+  (False, False, False) -> U
+  (True, False, False)  -> S
+  (True, True, False)   -> R
+  _                     -> panic
+
+mulQty :: Qty -> Qty -> Qty
+mulQty (Qty a b c) (Qty x y z) = Qty (x .&& a) ((y .|| b) .&& (y .|| sNot a) .&& (b .|| sNot x)) (z .&& c)
+
+addQty :: Qty -> Qty -> Qty
+addQty (Qty a b c) (Qty x y z) = Qty (x .|| a) (y .&& b) ((z .&& sNot c .&& sNot a) .|| (c .&& sNot z .&& sNot x))
+
+
 data NameOrigin = NOSource | NOInserted
   deriving (Eq,Ord,Show,Read,Bounded,Enum)
 
@@ -134,3 +190,5 @@ pattern VMeta :: Meta -> Val
 pattern VMeta m = VNe (HMeta m) SNil
 
 makeLenses ''Context
+
+

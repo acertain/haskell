@@ -1,0 +1,110 @@
++|ELARUS *|ELARUS six-point semiring with strictness 
+-+------ -+------ 
+E|ELARUS E|EEEEEE 
+L|LRSRSS L|ELARUS 
+A|ASUSUS A|EAAUUU 
+R|RRSRSS R|ERURUS 
+U|USUSUS U|EUUUUU 
+S|SSSSSS S|ESUSUS 
+
+
+unr
+relevent
+affine
+strict
+linear
+erased
+
+-- generators -- U
+E ⊆ A = True -- /| 
+L ⊆ A = True -- / S
+L ⊆ R = True -- / |
+A ⊆ U = True -- A R
+R ⊆ S = True -- |\ /
+S ⊆ U = True -- E L
+-- transitive
+E ⊆ U = True
+R ⊆ U = True
+L ⊆ S = True
+L ⊆ U = True
+-- reflexive
+E ⊆ E = True
+L ⊆ L = True
+A ⊆ A = True
+R ⊆ R = True
+S ⊆ S = True
+U ⊆ U = True
+_ ⊆ _ = False 
+
+
+x y z
+------                                                                     
+0 _ _ = erased
+1 _ _ = relevant                                                           
+_ 0 _ = no weakening
+_ 1 _ = strict, weakenable in all but one branch                    
+_ 2 _ = weakening                               
+_ _ 0 = no contraction                                            
+_ _ 1 = contraction                                                 
+
+
+E = 0 2 1
+L = 1 0 0  
+A = 1 2 0   
+U = 1 2 1   
+S = 1 1 1  
+R = 1 0 1   
+
+
+
+starting again:
+
+
+E 0 1 0
+L 1 1 1
+A 0 0 1
+U 0 0 0
+S 1 0 0
+R 1 1 0
+
+U 0 0 0
+A 0 0 1
+E 0 1 0
+S 1 0 0
+R 1 1 0
+L 1 1 1
+
+impossible:
+0 1 1
+1 0 1
+
+
+~c || ~b || a
+~c || b || ~a
+
+
+a: AUE=0, LRS=1
++|US *|US
+-+-- -+--
+U|US U|UU
+S|SS S|US
+
+b: USA=0, ELR=1
++|ERS *|ERS
+-+--- -+---
+E|EES E|EEE
+R|EES R|EES
+S|SSS S|ESS
+
+c: URSE=0, LA=1
++|EAS *|EAS
+-+--- -+---
+E|SAS E|SSS
+A|ASS A|SAS
+S|SSS S|SSS
+
+
+x y z + a b c = (x || a) (y && b) ((z && ~c && ~a) || (c && ~z && ~x))
+x y z * a b c = (x && a) ((y || b) && (y || ~a) && (b || ~x)) (z && c)
+
+
