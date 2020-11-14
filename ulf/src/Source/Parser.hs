@@ -75,7 +75,7 @@ ident = try do
 
 kw :: String -> Parser String
 kw s = try do
-  x <- takeWhile1P Nothing isAlphaNum <* whitespace
+  x <- takeWhile1P Nothing (\x -> notElem x "(){}:" && not (isSpace x)) <* whitespace
   x <$ guard (x == s)
 
 op :: String -> Parser String
@@ -86,14 +86,14 @@ op s = try do
 -- TODO: use symbol parsing to find : rather than char
 
 atom :: Parser Term
-atom = loc (Var <$> ident
+atom = (loc (Var <$> ident
           <|> U <$ kw "U"
           <|> Hole <$ kw "_"
-       ) <|> parens term
+       ) <|> parens term)
 
 arg :: Parser (Icit, Term)
-arg = (Implicit,) <$> braces term
-  <|> (Explicit,) <$> parens term
+arg = ((Implicit,) <$> braces term
+   <|> (Explicit,) <$> atom) <?> "argument"
 
 spine :: Parser Term
 spine = foldl' (\t (i, u) -> App i t u) <$> atom <*> many arg
@@ -112,14 +112,13 @@ let_ = go <$ symbol "let" <*> ident <*> optional (colon *> term)
   go x ann t u = Let x (fromMaybe Hole ann) t u
 
 pi :: Parser Term
-pi = go <$> try (some binder) <* arr <*> term
- <|> Pi underscore Explicit <$> spine <* arr <*> term where
+pi = go <$> try (some binder) <* arr <*> term where
   go dom cod = foldr (\(xs, a, i) t -> foldr (\x -> Pi x i a) t xs) cod dom
   binder = braces ((,,Implicit) <$> some bind <*> ((colon *> term) <|> pure Hole))
        <|> parens ((,,Explicit) <$> some bind <* colon <*> term)
-   
+
 term :: Parser Term
-term = loc (lam <|> let_ <|> pi)
+term = loc (lam <|> let_ <|> pi <|> (spine >>= \s -> (arr >> Pi underscore Explicit s <$> term) <|> pure s))
 
 src :: Parser Term
 src = whitespace *> term <* eof

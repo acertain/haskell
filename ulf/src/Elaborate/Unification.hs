@@ -237,13 +237,13 @@ closingTm = go 0 where
   getName (x:_)  _ = x
 
   go !_ !_ 0 !_ rhs = pure rhs
-  go d a l xs rhs = force a >>= \case
-    VPi (getName xs -> x) i _ b  -> do
+  go d ty l xs rhs = force ty >>= \case
+    VPi (getName xs -> x) i a b  -> do
       a' <- b (VVar d) 
       bd <- uneval d a 
       Lam x i bd <$> go (d + 1) a' (l-1) (drop 1 xs) rhs
 #ifdef FCIF
-    VPiTel (getName xs -> x) _ b -> do
+    VPiTel (getName xs -> x) a b -> do
       a' <- b (VVar d)
       bd <- uneval d a
       LamTel x bd <$> go (d + 1) a' (l-1) (drop 1 xs) rhs
