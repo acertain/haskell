@@ -95,7 +95,7 @@ data Context
 emptyCtx :: Context
 emptyCtx = Context VNil TyNil [] [] 0
 
-data Q = E | L | A | R | U | S deriving (Show)
+data Q = E | L | A | R | U_ | S deriving (Show)
 
 data Qty = Qty SBool SBool SBool
 
@@ -109,7 +109,7 @@ knownQty = \case
   E -> Qty z o z
   L -> Qty o o o
   A -> Qty z z o
-  U -> Qty z z z
+  U_ -> Qty z z z
   S -> Qty o z z
   R -> Qty o o z
   where 
@@ -131,7 +131,7 @@ qtyVal (Qty x y z) = M $ ((,,) <$> getValue x <*> getValue y <*> getValue z) <&>
   (False, True, False)  -> E
   (True, True, True)    -> L
   (False, False, True)  -> A
-  (False, False, False) -> U
+  (False, False, False) -> U_
   (True, False, False)  -> S
   (True, True, False)   -> R
   _                     -> panic
