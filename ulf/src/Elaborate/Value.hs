@@ -1,3 +1,8 @@
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# Language CPP #-}
@@ -18,15 +23,13 @@ module Elaborate.Value where
 import Common.Icit
 import Common.Names
 import Common.Unique
+import Common.Qty
 import Control.Lens hiding (Context)
 import Data.Hashable
 import Data.HashSet
 import Data.IORef
 import GHC.Exception
 import GHC.Stack.Types
-import Control.Monad.State
-import Data.SBV.Trans.Control (Query, getValue, queryState, QueryT)
-import Data.SBV.Trans ((.||), MonadSymbolic(..), (.&&), sNot, sBool, constrain, sFalse, sTrue, SBool)
 
 panic :: HasCallStack => a
 panic = throw (errorCallWithCallStackException "impossible" ?callStack)
@@ -41,7 +44,7 @@ instance Hashable Meta where
   hashWithSalt d (MetaRef h _) = hashWithSalt d h
 
 instance Show Meta where
-  show (MetaRef u _) = "_"
+  show (MetaRef _ _) = "_"
 
 newMeta :: MetaEntry -> IO Meta
 newMeta m = MetaRef <$> newUnique <*> newIORef m
@@ -58,6 +61,9 @@ readMeta (MetaRef _ r) = readIORef r
 modifyMeta :: Meta -> (MetaEntry -> MetaEntry) -> IO ()
 modifyMeta (MetaRef _ r) f = modifyIORef' r f
 {-# inline modifyMeta #-}
+
+metaName :: Meta -> Name
+metaName (MetaRef u _) = MetaName u 0
 
 type Metas = HashSet Meta
 type Blocking = Metas
@@ -79,69 +85,22 @@ data Vals
   | VSkip !Vals
   | VDef !Vals Val
 
+-- TODO: imo there should by a TySnocRec ?
 data Types
   = TyNil
   | TySnoc !Types !SlotType VTy
 
 data Context
   = Context
-   { _vals :: Vals
-   , _types :: Types
-   , _names :: [Name]
-   , _nameOrigin :: [NameOrigin]
-   , _len :: Int
+   { _vals :: !Vals
+   , _types :: !Types
+   , _names :: ![Name]
+   , _nameOrigin :: ![NameOrigin]
+   , _len :: !Int
    }
 
 emptyCtx :: Context
 emptyCtx = Context VNil TyNil [] [] 0
-
-data Q = E | L | A | R | U_ | S deriving (Show)
-
-data Qty = Qty SBool SBool SBool
-
-type Qtys = [Qty]
-
-newtype M a = M (StateT Qtys Query a)
-  deriving (Functor, Applicative, Monad, MonadIO)
-
-knownQty :: Q -> Qty
-knownQty = \case
-  E -> Qty z o z
-  L -> Qty o o o
-  A -> Qty z z o
-  U_ -> Qty z z z
-  S -> Qty o z z
-  R -> Qty o o z
-  where 
-    o = sTrue
-    z = sFalse
-
-qtyVar :: M Qty
-qtyVar = M $ do
-  x <- sBool "x"
-  y <- sBool "y"
-  z <- sBool "z"
-  lift $ do
-    constrain $ sNot (z .&& y .&& sNot x)
-    constrain $ sNot (z .&& sNot y .&& x)
-  pure (Qty x y z)
-
-qtyVal :: Qty -> M Q
-qtyVal (Qty x y z) = M $ ((,,) <$> getValue x <*> getValue y <*> getValue z) <&> \case
-  (False, True, False)  -> E
-  (True, True, True)    -> L
-  (False, False, True)  -> A
-  (False, False, False) -> U_
-  (True, False, False)  -> S
-  (True, True, False)   -> R
-  _                     -> panic
-
-mulQty :: Qty -> Qty -> Qty
-mulQty (Qty a b c) (Qty x y z) = Qty (x .&& a) ((y .|| b) .&& (y .|| sNot a) .&& (b .|| sNot x)) (z .&& c)
-
-addQty :: Qty -> Qty -> Qty
-addQty (Qty a b c) (Qty x y z) = Qty (x .|| a) (y .&& b) ((z .&& sNot c .&& sNot a) .|| (c .&& sNot z .&& sNot x))
-
 
 data NameOrigin = NOSource | NOInserted
   deriving (Eq,Ord,Show,Read,Bounded,Enum)
@@ -166,17 +125,17 @@ type VTy = Val
 
 data Val
   = VNe !Head !Spine
-  | VPi !Name !Icit VTy EVTy
+  | VPi !Name !Icit !Qty VTy EVTy
   | VLam !Name !Icit VTy EVal
   | VU
 #ifdef FCIF
   | VTel
   | VRec Val
   | VTNil
-  | VTCons !Name Val EVal
+  | VTCons !Name !Qty Val EVal
   | VTnil
   | VTcons Val Val
-  | VPiTel !Name Val EVal
+  | VPiTel !Name !Qty Val EVal
   | VLamTel !Name Val EVal
 #endif
 

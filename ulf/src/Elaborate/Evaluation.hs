@@ -16,6 +16,7 @@
 module Elaborate.Evaluation where
 
 import Common.Icit
+import Common.Qty
 #ifdef FCIF
 import Common.Names
 #endif
@@ -61,20 +62,20 @@ evalCdr (VNe h sp) = pure $ VNe h (SCdr sp)
 evalCdr (VLamTel x a t) = evalLamTel pure x a t >>= evalCdr
 evalCdr _ = panic
 
-evalPiTel :: EVal -> Name -> VTy -> EVal -> IO Val
-evalPiTel k x a0 b = force a0 >>= \case
+evalPiTel :: EVal -> Name -> Qty -> VTy -> EVal -> IO Val
+evalPiTel k x q a0 b = force a0 >>= \case
   VTNil -> b VTnil >>= k
-  VTCons _ a as -> pure
+  VTCons _ q2 a as -> pure
     let (x',x'') = splitName x
-    in VPi x' Implicit a \ ~x1 -> do
+    in VPi x' Implicit (mulQty q q2) a \ ~x1 -> do
       ~x1v <- as x1
-      evalPiTel pure x'' x1v \ ~x2 -> b (VTcons x1 x2)
-  a -> pure $ VPiTel x a b
+      evalPiTel pure x'' q x1v \ ~x2 -> b (VTcons x1 x2)
+  a -> pure $ VPiTel x q a b
 
 evalLamTel :: EVal -> Name -> VTy -> EVal -> IO Val
 evalLamTel k x a0 t = force a0 >>= \case
   VTNil -> t VTnil >>= k
-  VTCons _ a as -> pure
+  VTCons _ _ a as -> pure
     let (x',x'') = splitName x
     in VLam x' Implicit a \ ~x1 -> do
       ~x1v <- as x1
@@ -84,7 +85,7 @@ evalLamTel k x a0 t = force a0 >>= \case
 evalAppTel ::  VTy -> Val -> Val -> IO Val
 evalAppTel a0 t u = force a0 >>= \case
   VTNil -> pure t
-  VTCons _ _ as -> do
+  VTCons _ _ _ as -> do
     u1 <- evalCar u
     u1v <- as u1
     u2 <- evalCdr u
@@ -123,7 +124,7 @@ force = \case
     Solved v   -> evalAppSp v sp >>= force
 #ifdef FCIF
     _ -> panic
-  VPiTel x a b -> evalPiTel force x a b
+  VPiTel x q a b -> evalPiTel force x q a b
   VLamTel x a t -> evalLamTel force x a t
 #endif
   v -> pure v
@@ -144,7 +145,7 @@ eval vs = go where
     Let _ _ t u  -> go t >>= goBind u
     U            -> pure VU
     Meta m       -> evalMeta m
-    Pi x i a b   -> unsafeInterleaveIO (go a) <&> \a' -> VPi x i a' (goBind b)
+    Pi x i q a b   -> unsafeInterleaveIO (go a) <&> \a' -> VPi x i q a' (goBind b)
     Lam x i a t  -> unsafeInterleaveIO (go a) <&> \a' -> VLam x i a' (goBind t)
     App i t u    -> do
       t' <- unsafeInterleaveIO (go t)
@@ -153,15 +154,15 @@ eval vs = go where
 #ifdef FCIF
     Tel          -> pure VTel
     TNil         -> pure VTNil
-    TCons x a b  -> unsafeInterleaveIO (go a) <&> \a' -> VTCons x a' (goBind b)
+    TCons x q a b  -> unsafeInterleaveIO (go a) <&> \a' -> VTCons x q a' (goBind b)
     Rec a        -> VRec <$> go a
     Tnil         -> pure VTnil
     Tcons t u    -> VTcons <$> unsafeInterleaveIO (go t) <*> unsafeInterleaveIO (go u)
     Car t        -> go t >>= evalCar
     Cdr t        -> go t >>= evalCdr
-    PiTel x a b  -> do
+    PiTel x q a b  -> do
       a' <- unsafeInterleaveIO (go a)
-      evalPiTel pure x a' (goBind b)
+      evalPiTel pure x q a' (goBind b)
     AppTel a t u -> do
       a' <- unsafeInterleaveIO (go a)
       t' <- unsafeInterleaveIO (go t)
@@ -191,20 +192,52 @@ uneval d = go where
       in forceSp sp0 >>= goSp
 
     VLam x i a t  -> Lam x i <$> go a <*> goBind t
-    VPi x i a b   -> Pi x i <$> go a <*> goBind b
+    VPi x i q a b   -> Pi x i q <$> go a <*> goBind b
     VU            -> pure U
 #ifdef FCIF
     VTel          -> pure Tel
     VRec a        -> Rec <$> go a
     VTNil         -> pure TNil
-    VTCons x a as -> TCons x <$> go a <*> goBind as
+    VTCons x q a as -> TCons x q <$> go a <*> goBind as
     VTnil         -> pure Tnil
     VTcons t u    -> Tcons <$> go t <*> go u
-    VPiTel x a b  -> PiTel x <$> go a <*> goBind b
+    VPiTel x q a b  -> PiTel x q <$> go a <*> goBind b
     VLamTel x a t -> LamTel x <$> go a <*> goBind t
 #endif
 
   goBind t = t (VVar d) >>= uneval (d + 1)
+
+uneval' :: Lvl -> Val -> IO TM
+uneval' d = go where
+  go = \case
+    VNe h sp0 ->
+      let goSp SNil = case h of
+            HMeta m -> pure $ Meta m
+            HVar x  -> pure $ Var (d - x - 1)
+          goSp (SApp i sp u) = App i <$> goSp sp <*> go u
+#ifdef FCIF
+          goSp (SAppTel a sp u) = AppTel <$> go a <*> goSp sp <*> go u
+          goSp (SCar sp) = Car <$> goSp sp
+          goSp (SCdr sp) = Cdr <$> goSp sp
+#endif
+      in goSp sp0
+
+    VLam x i a t  -> Lam x i <$> go a <*> goBind t
+    VPi x i q a b   -> Pi x i q <$> go a <*> goBind b
+    VU            -> pure U
+#ifdef FCIF
+    VTel          -> pure Tel
+    VRec a        -> Rec <$> go a
+    VTNil         -> pure TNil
+    VTCons x q a as -> TCons x q <$> go a <*> goBind as
+    VTnil         -> pure Tnil
+    VTcons t u    -> Tcons <$> go t <*> go u
+    VPiTel x q a b  -> PiTel x q <$> go a <*> goBind b
+    VLamTel x a t -> LamTel x <$> go a <*> goBind t
+#endif
+
+  goBind t = t (VVar d) >>= uneval (d + 1)
+
 
 nf :: Vals -> TM -> IO TM
 nf vs t = do

@@ -31,153 +31,154 @@ define x a t (Context vs tys ns no d) =
   Context (VDef vs t) (TySnoc tys Def a) (x:ns) (NOSource:no) (d + 1)
 
 -- | Insert fresh implicit applications.
-insert' :: Context -> IO (TM, VTy) -> IO (TM, VTy)
+insert' :: GivenSolver => Context -> IO (Qtys, TM, VTy) -> IO (Qtys, TM, VTy)
 insert' cxt act = do
-  (t0, va0) <- act
-  let go t va = force va >>= \case
-        VPi _ Implicit a b -> do
-          m <- freshMeta cxt a
-          mv <- eval (cxt^.vals) m
-          mv' <- b mv
-          go (App Implicit t m) mv'
-        va' -> pure (t, va')
-  go t0 va0
+  (qs1, t0, va0) <- act
+  let go qs t va = force va >>= \case
+        VPi _ Implicit _ a b -> do
+          (qs',m) <- freshMeta cxt a
+          mv' <- b =<< eval (cxt^.vals) m
+          go (qs <> qs') (App Implicit t m) mv'
+        va' -> pure (qs, t, va')
+  go qs1 t0 va0
 
 -- | Insert fresh implicit applications to a term which is not
 --   an implicit lambda (i.e. neutral).
-insert :: Context -> IO (TM, VTy) -> IO (TM, VTy)
+insert :: GivenSolver => Context -> IO (Qtys, TM, VTy) -> IO (Qtys, TM, VTy)
 insert cxt act = act >>= \case
-  (t@(Lam _ Implicit _ _), va) -> pure (t, va)
-  (t                     , va) -> insert' cxt (pure (t, va))
+  (qs, t@(Lam _ Implicit _ _), va) -> pure (qs, t, va)
+  (qs, t                     , va) -> insert' cxt (pure (qs, t, va))
 
 
--- (fn, dom, cod)
-expectFn :: Context -> Raw.Term -> Icit -> IO (TM, VTy, EVTy)
+expectFn :: GivenSolver => Context -> Raw.Term -> Icit -> IO (Qtys, TM, Qty, VTy, EVTy)
 expectFn cxt tm i = do
-  (t, va) <- case i of
+  (qs1, t, va) <- case i of
     -- fcif uses insert' here for agda parity
     -- > For example (λ{A} x. id {A} x) U is elaborated to (λ{A} x. id {A} x) {U} U
     -- but insert would be fine too imo
     Explicit -> insert' cxt $ infer cxt tm
     _        -> infer cxt tm
   force va >>= \case
-    VPi _ i' a b -> do
+    VPi _ i' q a b -> do
       unless (i == i') $ report (cxt^.names) $ IcitMismatch i i'
-      pure (t, a, b)
+      pure (qs1, t, q, a, b)
     va'@(VNe (HMeta _) _) -> do
-      (m',a0) <- freshMeta' cxt VU
+      -- NOTE: we ignore the quantities from the type metas here
+      (m',_,a0) <- freshMeta' cxt VU
       a <- eval (cxt^.vals) a0
       let x = metaName m'
-      c <- freshMeta (bind x NOInserted a cxt) VU
+      (_,c) <- freshMeta (bind x NOInserted a cxt) VU
       let b x' = eval (VDef (cxt^.vals) x') c
-      unifyWhile cxt va' (VPi x i a b)
-      pure (t, a, b)
+      q <- qtyVar
+      unifyWhile cxt va' (VPi x i q a b)
+      pure (qs1, t, q, a, b)
     _ -> do
       r <- unsafeInterleaveIO (uneval (cxt^.len) va)
       report (cxt^.names) $ ExpectedFunction r
 
 
-infer :: Context -> Raw.Term -> IO (TM, VTy)
+infer :: GivenSolver => Context -> Raw.Term -> IO (Qtys, TM, VTy)
 infer cxt = \case
   Raw.Loc p t -> addSourcePos p (infer cxt t)
 
-  Raw.U -> pure (U, VU)
+  Raw.U -> pure (mempty, U, VU)
 
   Raw.Var x -> do
-    let go :: [Name] -> [NameOrigin] -> Types -> Int -> IO (TM, VTy)
-        go (y:_) (NOSource:_) (TySnoc _ _ a) i | SourceName x 0 == y = pure (Var i,a)
-        go (_:xs) (_:os) (TySnoc as _ _) i = go xs os as (i + 1)
+    let go :: [Name] -> [NameOrigin] -> Types -> Int -> IO (Qtys, TM, VTy)
+        go (y:_) (NOSource:_) (TySnoc _ _ a) i | SourceName x 0 == y = pure (Qtys [oneQty],Var i,a)
+        go (_:xs) (_:os) (TySnoc as _ _) i = over _1 wknQtys <$> go xs os as (i + 1)
         go [] [] TyNil _ = report (cxt^.names) $ NameNotInScope (SourceName x 0)
         go _ _ _ _ = panic
     go (cxt^.names) (cxt^.nameOrigin) (cxt^.types) 0
 
   Raw.Pi x i a b -> do
-    a' <- check cxt a VU
+    (q1,a') <- check cxt a VU
     va <- eval (cxt^.vals) a'
-    b' <- check (bind (sourceName x) NOSource va cxt) b VU
-    pure (Pi (sourceName x) i a' b', VU)
+    (q2,b') <- check (bind (sourceName x) NOSource va cxt) b VU
+    q <- qtyVar
+    pure (q1 <> tailQtys q2, Pi (sourceName x) i q a' b', VU)
 
   Raw.App i t0 u -> do
-    (t, a, b) <- expectFn cxt t0 i
-    u' <- check cxt u a
+    (qs1, t, q, a, b) <- expectFn cxt t0 i
+    (qs2, u') <- check cxt u a
     ty <- eval (cxt^.vals) u' >>= b
-    pure (App i t u', ty)
+    pure (qs1 <> mulQtys q qs2, App i t u', ty)
 
   Raw.Lam (sourceName -> x) ann i t -> do
-    a <- case ann of
+    (_, a) <- case ann of
       Just ann' -> check cxt ann' VU
       Nothing   -> freshMeta cxt VU
     va <- eval (cxt^.vals) a
     let cxt' = bind x NOSource va cxt
-    (t', liftVal cxt -> b) <- insert cxt' $ infer cxt' t
-    pure (Lam x i a t', VPi x i va b)
+    (qs, t', liftVal cxt -> b) <- insert cxt' $ infer cxt' t
+    pure (tailQtys qs, Lam x i a t', VPi x i (headQtys qs) va b)
 
   Raw.Hole -> do
-    a <- freshMeta cxt VU
+    (_,a) <- freshMeta cxt VU
     ~va <- eval (cxt^.vals) a
-    t <- freshMeta cxt va
-    pure (t, va)
+    (qs,t) <- freshMeta cxt va
+    pure (qs, t, va)
 
   Raw.Let (sourceName -> x) a0 t0 u -> do
-    a <- check cxt a0 VU
+    (_,a) <- check cxt a0 VU
     va <- eval (cxt^.vals) a
-    t <- check cxt t0 va
+    (q1,t) <- check cxt t0 va
     vt <- eval (cxt^.vals) t
-    (u', b) <- infer (define x va vt cxt) u
-    pure (Let x a t u', b)
+    (q2, u', b) <- infer (define x va vt cxt) u
+    -- TODO: is the qty here right?
+    pure (tailQtys q2 <> mulQtys (headQtys q2) q1, Let x a t u', b)
 
-metaName :: Meta -> Name
-metaName (MetaRef u _) = MetaName u 0
-
-check :: Context -> Raw.Term -> VTy -> IO TM
+check :: GivenSolver => Context -> Raw.Term -> VTy -> IO (Qtys, TM)
 check cxt topT ~topA0 = force topA0 >>= \ ftopA -> case (topT, ftopA) of
   (Raw.Loc p t, a) -> addSourcePos p (check cxt t a)
 
-  (Raw.Lam (sourceName -> x) ann0 i t0, VPi _ i' a b) | i == i' -> do
+  (Raw.Lam (sourceName -> x) ann0 i t0, VPi _ i' _ a b) | i == i' -> do
     ann' <- case ann0 of
       Just ann1 -> do
-        ann <- check cxt ann1 VU
+        (_, ann) <- check cxt ann1 VU
         ann' <- unsafeInterleaveIO $ eval (cxt^.vals) ann
         unifyWhile cxt ann' a
         pure ann
       Nothing -> uneval (cxt^.len) a
-    t <- do
+    (qs, t) <- do
       ty <- b (VVar (cxt^.len))
       check (bind x NOSource a cxt) t0 ty
-    pure $ Lam x i ann' t
+    pure (tailQtys qs, Lam x i ann' t)
 
-  (t0, VPi x Implicit a b) -> do
+  (t0, VPi x Implicit q a b) -> do
     ty <- b (VVar (cxt^.len))
-    t <- check (bind x NOInserted a cxt) t0 ty
+    (qs,t) <- check (bind x NOInserted a cxt) t0 ty
+    qtyEq (headQtys qs) q
     a' <- uneval (cxt^.len) a
-    pure $ Lam x Implicit a' t
+    pure (tailQtys qs, Lam x Implicit a' t)
 
 #ifdef FCIF
   -- inserting a new curried function lambda
   (t0, VNe (HMeta _) _) -> do
     -- x <- ("Γ"++) . show <$> readMeta nextMId
-    (m,d) <- freshMeta' cxt VTel
+    (m,_,d) <- freshMeta' cxt VTel
     let x = metaName m
     vdom <- unsafeInterleaveIO $ eval (cxt^.vals) d
     let cxt' = bind x NOInserted (VRec vdom) cxt
-    (t, liftVal cxt -> a) <- insert cxt' $ infer cxt' t0
+    (q2, t, liftVal cxt -> a) <- insert cxt' $ infer cxt' t0
     newConstancy cxt vdom a
     unifyWhile cxt topA0 (VPiTel x vdom a)
-    pure $ LamTel x d t
+    -- TODO: i guess? still need to figure out how 2 deal w/ tels + qtys
+    pure (tailQtys q2, LamTel x d t)
 #endif
 
-  (Raw.Let (sourceName -> x) a0 t0 u0, topA) -> do
-    a <- check cxt a0 VU
-    va <- unsafeInterleaveIO (eval (cxt^.vals) a)
-    t <- check cxt t0 va
-    vt <- unsafeInterleaveIO (eval (cxt^.vals) t)
-    u <- check (define x va vt cxt) u0 topA
-    pure $ Let x a t u
+  -- (Raw.Let (sourceName -> x) a0 t0 u0, topA) -> do
+  --   a <- check cxt a0 VU
+  --   va <- unsafeInterleaveIO (eval (cxt^.vals) a)
+  --   t <- check cxt t0 va
+  --   vt <- unsafeInterleaveIO (eval (cxt^.vals) t)
+  --   u <- check (define x va vt cxt) u0 topA
+  --   pure $ Let x a t u
 
   (Raw.Hole, topA) -> freshMeta cxt topA
 
   (t0, topA) -> do
-    (t, va) <- insert cxt $ infer cxt t0
+    (qs, t, va) <- insert cxt $ infer cxt t0
     unifyWhile cxt va topA
-    pure t
+    pure (qs, t)
 

@@ -48,7 +48,7 @@ zonk vs t0 = go t0 where
       _          -> panic
 #endif
     U            -> pure U
-    Pi x i a b   -> Pi x i <$> go a <*> goBind b
+    Pi x i q a b   -> Pi x i q <$> go a <*> goBind b
     App ni t1 u   -> goSp t1 >>= \case
       Left t  -> do
         u' <- eval vs u
@@ -61,13 +61,13 @@ zonk vs t0 = go t0 where
 #ifdef FCIF
     Tel          -> pure Tel
     TNil         -> pure TNil
-    TCons x t u  -> TCons x <$> go t <*> goBind u
+    TCons x q t u  -> TCons x q <$> go t <*> goBind u
     Rec a        -> Rec <$> go a
     Tnil         -> pure Tnil
     Tcons t u    -> Tcons <$> go t <*> go u
     Car t        -> Car <$> go t
     Cdr t        -> Cdr <$> go t
-    PiTel x a b  -> PiTel x <$> go a <*> goBind b
+    PiTel x q a b  -> PiTel x q <$> go a <*> goBind b
     AppTel a t1 u -> goSp t1 >>= \case
       Left t  -> do
         a' <- eval vs a

@@ -23,7 +23,7 @@ module Elaborate.Unification where
 
 import Common.Icit
 import Common.Names
-import Control.Exception
+import Common.Qty
 import Control.Lens hiding (Context)
 import Data.Foldable (forM_)
 #ifdef FCIF
@@ -39,6 +39,7 @@ import Elaborate.Value
 import Elaborate.Occurrence
 #endif
 import System.IO.Unsafe (unsafeInterleaveIO)
+import Control.Exception (catch, throwIO, try)
 
 lvlName :: Int -> [Name] -> Lvl -> Name
 lvlName ln ns x = ns !! (ln - x - 1)
@@ -106,22 +107,22 @@ strengthen str0 = go where
               go' [] str z = strengthen str z
 
               go' (True:pr) str z = force z >>= \case
-                VPi x i a b -> do
+                VPi x i q a b -> do
                   r <- unsafeInterleaveIO $ b $ VVar (str^.cod)
-                  Pi x i <$> strengthen str a <*> go' pr (liftStr str) r
+                  Pi x i q <$> strengthen str a <*> go' pr (liftStr str) r
 #ifdef FCIF
-                VPiTel x a b ->do
+                VPiTel x q a b ->do
                   r <- unsafeInterleaveIO $ b $ VVar (str^.cod)
-                  PiTel x <$> strengthen str a <*> go' pr (liftStr str) r
+                  PiTel x q <$> strengthen str a <*> go' pr (liftStr str) r
 #endif
                 _ -> panic
 
               go' (False:pr) str z = force z >>= \case
-                VPi _ _ _ b -> do
+                VPi _ _ _ _ b -> do
                   r <- unsafeInterleaveIO $ b $ VVar (str^.cod)
                   go' pr (skipStr str) r
 #ifdef FCIF
-                VPiTel _ _ b -> do
+                VPiTel _ _ _ b -> do
                   r <- unsafeInterleaveIO $ b $ VVar (str^.cod)
                   go' pr (skipStr str) r
 #endif
@@ -130,6 +131,7 @@ strengthen str0 = go where
           go' pruning (Str 0 0 mempty Nothing) metaTy
 
         pty <- eval VNil prunedTy
+        -- TODO: do we need to do anything more for qtys here?
         m' <- newMeta $ Unsolved mempty pty
 
         let argNum = length pruning
@@ -137,11 +139,11 @@ strengthen str0 = go where
               go' [] _ acc _ = pure acc
               go' (True:pr) z acc d = do
                 force z >>= \case 
-                  VPi _ i _ b -> do
+                  VPi _ i _ _ b -> do
                     a' <- unsafeInterleaveIO $ b (VVar d)
                     go' pr a' (App i acc (Var (argNum - d - 1))) (d + 1)
 #ifdef FCIF
-                  VPiTel _ a b -> do
+                  VPiTel _ _ a b -> do
                     a' <- unsafeInterleaveIO $ b (VVar d)
                     u <- unsafeInterleaveIO $ uneval argNum a
                     go' pr a' (AppTel u acc (Var (argNum - d - 1))) (d + 1)
@@ -149,11 +151,11 @@ strengthen str0 = go where
                   _ -> panic 
               go' (False:pr) z acc d = do
                 force z >>= \case
-                  VPi _ _ _ b -> do
+                  VPi _ _ _ _ b -> do
                     a' <- unsafeInterleaveIO $ b (VVar d)
                     go' pr a' acc (d + 1)
 #ifdef FCIF
-                  VPiTel _ _ b -> do
+                  VPiTel _ _ _ b -> do
                     a' <- unsafeInterleaveIO $ b (VVar d)
                     go' pr a' acc (d + 1)
 #endif
@@ -180,17 +182,17 @@ strengthen str0 = go where
                             VNe (HMeta m') sp' -> goSp (Meta m') sp'
                             _ -> panic
 
-    VPi x i a b      -> Pi x i <$> go a <*> goBind b
+    VPi x i q a b     -> Pi x i q <$> go a <*> goBind b
     VLam x i a t'    -> Lam x i <$> go a <*> goBind t'
     VU               -> pure U
 #ifdef FCIF
     VTel             -> pure Tel
     VRec a           -> Rec <$> go a
     VTNil            -> pure TNil
-    VTCons x a b     -> TCons x <$> go a <*> goBind b
+    VTCons x q a b   -> TCons x q <$> go a <*> goBind b
     VTnil            -> pure Tnil
     VTcons t' u      -> Tcons <$> go t' <*> go u
-    VPiTel x a b     -> PiTel x <$> go a <*> goBind b
+    VPiTel x q a b   -> PiTel x q <$> go a <*> goBind b
     VLamTel x a t'   -> LamTel x <$> go a <*> goBind t'
 #endif
 
@@ -214,51 +216,54 @@ liftStr (Str c d r o) = Str (c + 1) (d + 1) (HM.insert d c r) o
 skipStr :: Str -> Str
 skipStr (Str c d r o) = Str c (d + 1) r o
 
-closingTy :: Context -> TY -> IO TY
+closingTy :: GivenSolver => Context -> TY -> IO (TY, Qtys)
 closingTy cxt = go (cxt^.types) (cxt^.names) (cxt^.len) where
-  go TyNil [] _ b = pure b
-  go (TySnoc tys Def _) (_:ns) d b = go tys ns (d-1) (Skip b)
+  go TyNil [] _ b = pure (b, mempty)
+  go (TySnoc tys Def _) (_:ns) d b = over _2 wknQtys <$> go tys ns (d-1) (Skip b)
 #ifdef FCIF
   go (TySnoc tys Bound (VRec a)) (x:ns) d b = do
     a' <- uneval (d-1) a
-    go tys ns (d-1) (PiTel x a' b)
+    q <- qtyVar
+    over _2 (consQtys q) <$> go tys ns (d-1) (PiTel x q a' b)
 #endif
   go (TySnoc tys Bound a) (x:ns) d b = do
     a' <- uneval (d-1) a
-    go tys ns (d-1) (Pi x Explicit a' b)
+    q <- qtyVar
+    over _2 (consQtys q) <$> go tys ns (d-1) (Pi x Explicit q a' b)
   go _ _ _ _ = panic
 
 -- | Close a term by wrapping it in `Int` number of lambdas, while taking the domain
 --   types from the `VTy`, and the binder names from a list. If we run out of provided
 --   binder names, we pick the names from the Pi domains.
 closingTm :: VTy -> Int -> [Name] -> TM -> IO TM
-closingTm = go 0 where
+closingTm = go 0 mempty where
   getName []     x = x
   getName (x:_)  _ = x
 
-  go !_ !_ 0 !_ rhs = pure rhs
-  go d ty l xs rhs = force ty >>= \case
-    VPi (getName xs -> x) i a b  -> do
+  go !_ !qs !_ 0 !_ rhs = do
+    pure rhs
+  go d qs ty l xs rhs = force ty >>= \case
+    VPi (getName xs -> x) i q a b  -> do
       a' <- b (VVar d) 
       bd <- uneval d a 
-      Lam x i bd <$> go (d + 1) a' (l-1) (drop 1 xs) rhs
+      Lam x i bd <$> go (d + 1) (consQtys q qs) a' (l-1) (drop 1 xs) rhs
 #ifdef FCIF
-    VPiTel (getName xs -> x) a b -> do
+    VPiTel (getName xs -> x) q a b -> do
       a' <- b (VVar d)
       bd <- uneval d a
-      LamTel x bd <$> go (d + 1) a' (l-1) (drop 1 xs) rhs
+      LamTel x bd <$> go (d + 1) (consQtys q qs) a' (l-1) (drop 1 xs) rhs
 #endif
     _ -> panic
 
 #ifdef FCIF
-newConstancy :: Context -> VTy -> EVal -> IO ()
+newConstancy :: GivenSolver => Context -> VTy -> EVal -> IO ()
 newConstancy cxt d c = do
   v <- c (VVar (cxt^.len))
   m <- newMeta $ Constancy cxt d v mempty
   tryConstancy m
 #endif
 
-tryConstancy :: Meta -> IO ()
+tryConstancy :: GivenSolver => Meta -> IO ()
 #ifdef FCIF
 tryConstancy constM = readMeta constM >>= \case
   Constancy cxt d c blockers -> do
@@ -285,10 +290,10 @@ tryConstancy = panic
 
 data SP = SP Spine {-# UNPACK #-} !Lvl
 
-freshMeta' :: Context -> VTy -> IO (Meta, TM)
+freshMeta' :: GivenSolver => Context -> VTy -> IO (Meta, Qtys, TM)
 freshMeta' cxt v = do
   a <- uneval (cxt^.len) v
-  metaTy <- closingTy cxt a
+  (metaTy,qtys) <- closingTy cxt a
   t <- eval VNil metaTy
   m <- newMeta $ Unsolved mempty t
   let vars :: Types -> SP
@@ -299,19 +304,19 @@ freshMeta' cxt v = do
 #endif
       vars (TySnoc (vars -> SP sp d) Bound _)         = SP (SApp Explicit sp (VVar d)) (d + 1)
   case vars (cxt^.types) of
-    SP sp _ -> (m,) <$> uneval (cxt^.len) (VNe (HMeta m) sp)
+    SP sp _ -> (m,qtys,) <$> uneval (cxt^.len) (VNe (HMeta m) sp)
 
-freshMeta :: Context -> VTy -> IO TM
-freshMeta cxt v = snd <$> freshMeta' cxt v
+freshMeta :: GivenSolver => Context -> VTy -> IO (Qtys, TM)
+freshMeta cxt v = (\(_,b,c) -> (b,c)) <$> freshMeta' cxt v
 
 -- | Wrap the inner `UnifyError` arising from unification in an `UnifyErrorWhile`.
 --   This decorates an error with one additional piece of context.
-unifyWhile :: Context -> Val -> Val -> IO ()
+unifyWhile :: GivenSolver => Context -> Val -> Val -> IO ()
 unifyWhile cxt l r = unify cxt l r `catch` \e -> do
   l' <- unsafeInterleaveIO (uneval (cxt^.len) l)
   r' <- unsafeInterleaveIO (uneval (cxt^.len) l)
   reportM (cxt^.names) $ UnifyErrorWhile l' r' e
-   
+
 checkSp :: Spine -> IO (Renaming, Lvl, [Lvl])
 checkSp s0 = do
   s1 <- forceSp s0
@@ -338,7 +343,7 @@ checkSp s0 = do
 #endif
 
 -- | May throw `UnifyError`.
-solveMeta :: Context -> Meta -> Spine -> Val -> IO ()
+solveMeta :: GivenSolver => Context -> Meta -> Spine -> Val -> IO ()
 solveMeta cxt m sp rhs = do
 
   -- these normal forms are only used in error reporting
@@ -370,9 +375,10 @@ solveMeta cxt m sp rhs = do
   forM_ blocked tryConstancy
 
 -- | May throw `UnifyError`.
-unify :: Context -> Val -> Val -> IO ()
+unify :: GivenSolver => Context -> Val -> Val -> IO ()
 unify cxt l r = go l r where
 
+  unifyError :: IO ()
   unifyError = do
     l' <- unsafeInterleaveIO $ uneval (cxt^.len) l
     r' <- unsafeInterleaveIO $ uneval (cxt^.len) r
@@ -388,24 +394,26 @@ unify cxt l r = go l r where
   implArity cxt' b = b (VVar (cxt'^.len)) >>= go' 0 (cxt'^.len + 1) where
     go' :: Int -> Int -> Val -> IO Int
     go' !acc ln a = force a >>= \case
-      VPi _ Implicit _ b' -> b' (VVar ln) >>= go' (acc + 1) (ln + 1)
+      VPi _ Implicit _ _ b' -> b' (VVar ln) >>= go' (acc + 1) (ln + 1)
       _ -> pure acc
 #endif
 
+  go :: Val -> Val -> IO ()
   go t0 t0' = ((,) <$> force t0 <*> force t0') >>= \case
     (VLam x _ a t, VLam _ _ _ t')            -> goBind x a t t'
     (VLam x i a t, t')                       -> goBind x a t \ v -> evalApp i t' v
     (t, VLam x' i' a' t')                    -> goBind x' a' (\ v -> evalApp i' t v) t'
-    (VPi x i a b, VPi _ i' a' b') | i == i'  -> go a a' >> goBind x a b b'
+    (VPi x i q a b, VPi _ i' q' a' b') | i == i' -> qtyEq q q' >> go a a' >> goBind x a b b'
     (VU, VU)                                 -> pure ()
 #ifdef FCIF
     (VTel, VTel)                             -> pure ()
     (VRec a, VRec a')                        -> go a a'
     (VTNil, VTNil)                           -> pure ()
-    (VTCons x a b, VTCons _ a' b')           -> go a a' >> goBind x a b b'
+    (VTCons x q a b, VTCons _ q' a' b')      -> qtyEq q q' >> go a a' >> goBind x a b b'
     (VTnil, VTnil)                           -> pure ()
     (VTcons t u, VTcons t' u')               -> go t t' >> go u u'
-    (VPiTel x a b, VPiTel _ a' b')           -> go a a' >> goBind x (VRec a) b b'
+    (VPiTel x q a b, VPiTel _ q' a' b')      -> qtyEq q q' >> go a a' >> goBind x (VRec a) b b'
+    -- TODO: invalid?
     (VLamTel x a t, VLamTel _  _ t')         -> goBind x (VRec a) t t'
     (VLamTel x a t, t')                      -> goBind x (VRec a) t (evalAppTel a t')
     (t, VLamTel x' a' t')                    -> goBind x' (VRec a') (evalAppTel a' t) t'
@@ -418,45 +426,45 @@ unify cxt l r = go l r where
     (VNe (HMeta m) sp, t')                   -> solveMeta cxt m sp t'
     (t, VNe (HMeta m') sp')                  -> solveMeta cxt m' sp' t
 #ifdef FCIF
-    (VPiTel x a b, t@(VPi x' Implicit a' b')) -> do
+    (VPiTel x q a b, t@(VPi x' Implicit q' a' b')) -> do
       ia <- implArity cxt b
       ib <- implArity cxt b'
       if ia <= ib then do
         let cxt' = bindSrc x' a' cxt
-        vm <- unsafeInterleaveIO do
-          m <- freshMeta cxt' VTel
+        vm <- do
+          (_,m) <- freshMeta cxt' VTel
           eval (cxt'^.vals) m
-        go a $ VTCons x' a' $ liftVal cxt vm
+        go a $ VTCons x' (mulQty q q') a' $ liftVal cxt vm
         let b2 ~x1 ~x2 = b (VTcons x1 x2)
         newConstancy cxt' vm $ b2 $ VVar (cxt^.len)
         goBind x' a' 
-          (\ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x t' (b2 x1)) b'
+          (\ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x q t' (b2 x1)) b'
       else do
         go a VTNil
         r' <- b VTnil
         go r' t
-
-    (t@(VPi x' Implicit a' b'), VPiTel x a b) -> do
+    (t@(VPi x' Implicit q' a' b'), VPiTel x q a b) -> do
       ia <- implArity cxt b
       ib <- implArity cxt b'
       if ia <= ib then do
         let cxt' = bindSrc x' a' cxt
-        vm <- unsafeInterleaveIO do
-          m <- freshMeta cxt' VTel
+        vm <- do
+          (_,m) <- freshMeta cxt' VTel
           eval (cxt'^.vals) m
-        go a $ VTCons x' a' $ liftVal cxt vm
+        go a $ VTCons x' (mulQty q q') a' $ liftVal cxt vm
         let b2 ~x1 ~x2 = b (VTcons x1 x2)
         newConstancy cxt' vm $ b2 $ VVar (cxt^.len)
-        goBind x' a' b' \ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x t' (b2 x1)
+        goBind x' a' b' \ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x q t' (b2 x1)
       else do
         go a VTNil
         r' <- b VTnil
         go t r'
-    (VPiTel _ a b, t) -> do
+    -- TODO: set q = zero?
+    (VPiTel _ q a b, t) -> do
       go a VTNil
       r' <- b VTnil
       go r' t
-    (t, VPiTel _ a b) -> do
+    (t, VPiTel _ q a b) -> do
       go a VTNil
       r' <- b VTnil
       go t r'
@@ -476,3 +484,59 @@ unify cxt l r = go l r where
     (SAppTel _ sp u, SAppTel _ sp' u')      -> goSp sp sp' >> go u u'
 #endif
     _ -> panic
+
+
+-- needs to work on values since it nees to infer the lhs of applications
+-- 
+-- m = demand/multiplier
+-- possible optimization: checkQtys (use in solveMeta, instead of inferQtys & constrain le)
+-- takes avail qtys, splits qtys into needed for value & left over (returned)
+-- tl needs to match ctx len in Val (for HVar)
+inferQtys :: Types -> Int -> Qty -> Val -> IO Qtys
+inferQtys tys !tl m = \case
+  VNe h spi -> snd <$> go spi where
+    go :: Spine -> IO (VTy, Qtys)
+    go SNil = case h of
+      HMeta mv -> do
+        Unsolved _ ty <- readMeta mv
+        pure (ty, mempty)
+      HVar v -> pure $ f tys (tl - v - 1) where
+        f :: Types -> Int -> (VTy, Qtys)
+        f (TySnoc _ _ t) 0 = (t, Qtys [m])
+        f (TySnoc ts _ _) !i = let (x,y) = f ts (i-1) in (x,wknQtys y)
+        f _ _ = panic
+    go (SApp _ sp x) = go sp >>= \case
+      (VPi _ _ q _ b, qs) -> do
+        y <- b x
+        z <- inferQtys tys tl (mulQty q m) x
+        pure (y, z <> qs)
+      _ -> panic
+    go (SAppTel _ sp x) = go sp >>= \case
+      (VPiTel _ q _ b, qs) -> do
+        y <- b x
+        z <- inferQtys tys tl (mulQty q m) x
+        pure (y, z <> qs)
+      _ -> panic
+    go (SCar sp) = go sp >>= \case
+      (VTCons _ q a _, qs) -> do
+        undefined
+      _ -> panic
+    go (SCdr s) = panic
+  VPi _ _ _ x y -> do
+    y' <- y (VVar tl)
+    (<>) <$> inferQtys tys tl m x <*> (tailQtys <$> inferQtys (TySnoc tys Bound x) (tl+1) m y')
+  VLam _ _ x y -> do
+    y' <- y (VVar tl)
+    tailQtys <$> inferQtys (TySnoc tys Bound x) (tl+1) m y'
+  VU -> pure mempty
+  VTel -> pure mempty
+  VRec v -> _
+  VTNil -> pure mempty
+  VTCons _ q x y -> _
+  VTnil -> pure mempty
+  VTcons x y -> _
+  VPiTel _ q x b -> _
+  VLamTel _ x b -> _
+
+
+

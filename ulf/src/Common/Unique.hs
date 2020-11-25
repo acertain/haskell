@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# Language MagicHash #-}
 {-# Language UnboxedTuples #-}
 {-# Language BlockArguments #-}
@@ -18,17 +19,23 @@ import Control.Monad.Primitive
 import Data.Hashable
 import GHC.Prim
 import GHC.Types
+import Data.Data
+import Data.Primitive
 
-data Unique = Unique {-# unpack #-} !Int (MutableByteArray# RealWorld)
+data Unique = Unique {-# unpack #-} !Int {-# unpack #-} !(MutableByteArray RealWorld)
+  deriving (Data)
 
 instance Eq Unique where
-  Unique _ p == Unique _ q = isTrue# (sameMutableByteArray# p q)
+  Unique _ p == Unique _ q = p == q
 
 instance Hashable Unique where
   hash (Unique i _) = i
   hashWithSalt d (Unique i _) = hashWithSalt d i
 
+instance Show Unique where
+  show (Unique i _) = "Unique " ++ show i ++ " _"
+
 newUnique :: IO Unique
 newUnique = primitive \s -> case newByteArray# 0# s of
-  (# s', ba #) -> (# s', Unique (I# (addr2Int# (unsafeCoerce# ba))) ba #)
+  (# s', ba #) -> (# s', Unique (I# (addr2Int# (unsafeCoerce# ba))) (MutableByteArray ba) #)
 {-# inline newUnique #-}

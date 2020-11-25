@@ -8,7 +8,7 @@ import Control.Exception
 import Text.Megaparsec (parse, errorBundlePretty)
 import System.Exit
 import Elaborate.Check (infer)
-import Elaborate.Value (emptyCtx)
+import Elaborate.Value (runM, emptyCtx)
 
 type Command = ParserInfo (IO ())
 
@@ -19,7 +19,7 @@ checkFile p _ = readFile p >>= \txt ->
       putStrLn $ errorBundlePretty e
       pure False
     Right r -> do
-      _ <- infer emptyCtx r
+      _ <- runM $ infer emptyCtx r
       pure True
 
 runCheck :: [FilePath] -> Bool -> IO ()

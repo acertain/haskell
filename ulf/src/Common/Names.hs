@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# Language BlockArguments #-}
 {-# Language ImportQualifiedPost #-}
 {-# Language RankNTypes #-}
@@ -30,11 +31,12 @@ import Numeric.Lens (base)
 import Data.String
 import GHC.Generics
 import Numeric.Natural
+import Data.Data
 
 data Name
   = SourceName ShortText Natural
   | MetaName Unique Natural
-  deriving (Eq,Generic,Hashable)
+  deriving (Eq,Generic,Hashable,Show,Data)
 
 type SourceName = ShortText
 
@@ -69,6 +71,9 @@ naming ns0 xs0 = evalState (traverse f xs0) (HM.empty, ns0) where
       (n:ns') -> (n, (HM.insert a n hm, ns'))
       _ -> error "out of names"
     Just n -> (n, s)
+
+
+
 
 metaNaming :: (Traversable f, Eq a, Hashable a) => f a -> f String
 metaNaming = naming metaNames

@@ -70,17 +70,17 @@ occurs d0 topX v0 = occurs' d0 mempty v0 where
         | x == topX -> (occurrence ms0 <>) <$> goSp ms0 sp
         | otherwise -> goSp ms0 sp
       VNe (HMeta m) sp -> goSp (HS.insert m ms0) sp
-      VPi _ _ a b   -> go a >< goBind b
+      VPi _ _ _ a b   -> go a >< goBind b
       VLam _ _ a t  -> go a >< goBind t
       VU            -> pure mempty
 #ifdef FCIF
       VTel          -> pure mempty
       VRec a        -> go a
       VTNil         -> pure mempty
-      VTCons _ a b  -> go a >< goBind b
+      VTCons _ _ a b  -> go a >< goBind b
       VTnil         -> pure mempty
       VTcons t u    -> go t >< go u
-      VPiTel _ a b  -> go a >< goBind b
+      VPiTel _ _ a b  -> go a >< goBind b
       VLamTel _ a t -> go a >< goBind t
 #endif
 {-# inline occurs #-}

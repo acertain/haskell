@@ -21,3 +21,4 @@ data Term
   | U
   | Hole
   | Loc !SourcePos !Term
+  deriving (Show)

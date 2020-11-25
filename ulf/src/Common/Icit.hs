@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 -- |
 -- Copyright :  (c) Edward Kmett 2020
 -- License   :  BSD-2-Clause OR Apache-2.0
@@ -7,7 +8,8 @@
 
 module Common.Icit where
 
+import Data.Data
 data Icit
   = Implicit
   | Explicit 
-  deriving (Eq,Ord,Show,Read,Bounded,Enum)
+  deriving (Eq,Ord,Show,Read,Bounded,Enum,Data)
