@@ -1,0 +1,109 @@
+cabal-version: 3.4
+name: sat
+version: 0
+synopsis: CaDiCaL sat solver bindings
+description: CaDiCaL sat solver bindings
+homepage: https://github.com/ekmett/haskell
+license: BSD-2-Clause OR Apache-2.0
+license-file: LICENSE.md
+author: Edward Kmett
+maintainer: Edward Kmett <ekmett@gmail.com>
+copyright: Copyright (c) 2020 Edward Kmett
+stability: experimental
+category: Data Structures
+build-type: Simple
+extra-doc-files: README.md
+
+
+source-repository head
+  type: git
+  location: https://github.com/ekmett/haskell
+  subdir: sat
+
+library
+  default-language: Haskell2010
+  build-depends:
+    base >= 4.14 && < 5,
+    unordered-containers >= 0.2.12 && < 0.3,
+    hashable >= 1.3.0 && < 1.4
+  ghc-options:
+    -Wall -Wincomplete-uni-patterns -Wincomplete-record-updates
+    -Wredundant-constraints -Widentities -Wmissing-export-lists
+  hs-source-dirs: src
+  include-dirs: cbits
+  includes: ccadical.h
+  cc-options: -O3 -DNDEBUG
+  extra-libraries: stdc++
+  c-sources:
+    cbits/cadical/src/analyze.cpp
+    cbits/cadical/src/arena.cpp
+    cbits/cadical/src/assume.cpp
+    cbits/cadical/src/averages.cpp
+    cbits/cadical/src/backtrack.cpp
+    cbits/cadical/src/backward.cpp
+    cbits/cadical/src/bins.cpp
+    cbits/cadical/src/block.cpp
+    cbits/cadical/src/ccadical.cpp
+    cbits/cadical/src/checker.cpp
+    cbits/cadical/src/clause.cpp
+    cbits/cadical/src/collect.cpp
+    cbits/cadical/src/compact.cpp
+    cbits/cadical/src/condition.cpp
+    cbits/cadical/src/config.cpp
+    cbits/cadical/src/contract.cpp
+    cbits/cadical/src/cover.cpp
+    cbits/cadical/src/decide.cpp
+    cbits/cadical/src/decompose.cpp
+    cbits/cadical/src/deduplicate.cpp
+    cbits/cadical/src/elim.cpp
+    cbits/cadical/src/ema.cpp
+    cbits/cadical/src/extend.cpp
+    cbits/cadical/src/external.cpp
+    cbits/cadical/src/file.cpp
+    cbits/cadical/src/flags.cpp
+    cbits/cadical/src/format.cpp
+    cbits/cadical/src/gates.cpp
+    cbits/cadical/src/instantiate.cpp
+    cbits/cadical/src/internal.cpp
+    cbits/cadical/src/ipasir.cpp
+    cbits/cadical/src/limit.cpp
+    cbits/cadical/src/logging.cpp
+    cbits/cadical/src/lookahead.cpp
+    cbits/cadical/src/lucky.cpp
+    cbits/cadical/src/message.cpp
+    cbits/cadical/src/message.hpp
+    cbits/cadical/src/minimize.cpp
+    cbits/cadical/src/occs.cpp
+    cbits/cadical/src/options.cpp
+    cbits/cadical/src/parse.cpp
+    cbits/cadical/src/phases.cpp
+    cbits/cadical/src/probe.cpp
+    cbits/cadical/src/profile.cpp
+    cbits/cadical/src/proof.cpp
+    cbits/cadical/src/propagate.cpp
+    cbits/cadical/src/queue.cpp
+    cbits/cadical/src/random.cpp
+    cbits/cadical/src/reduce.cpp
+    cbits/cadical/src/rephase.cpp
+    cbits/cadical/src/report.cpp
+    cbits/cadical/src/resources.cpp
+    cbits/cadical/src/restart.cpp
+    cbits/cadical/src/restore.cpp
+    cbits/cadical/src/score.cpp
+    cbits/cadical/src/signal.cpp
+    cbits/cadical/src/solution.cpp
+    cbits/cadical/src/solver.cpp
+    cbits/cadical/src/stats.cpp
+    cbits/cadical/src/subsume.cpp
+    cbits/cadical/src/terminal.cpp
+    cbits/cadical/src/ternary.cpp
+    cbits/cadical/src/tracer.cpp
+    cbits/cadical/src/transred.cpp
+    cbits/cadical/src/util.cpp
+    cbits/cadical/src/var.cpp
+    cbits/cadical/src/version.cpp
+    cbits/cadical/src/vivify.cpp
+    cbits/cadical/src/walk.cpp
+    cbits/cadical/src/watch.cpp
+  exposed-modules:
+    Solver.Sat.CaDiCaL

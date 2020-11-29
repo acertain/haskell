@@ -1,0 +1,3 @@
+[submodule "sat/cbits/cadical"]
+	path = sat/cbits/cadical
+	url = https://github.com/arminbiere/cadical.git
