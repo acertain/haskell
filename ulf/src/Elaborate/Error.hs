@@ -18,7 +18,7 @@ import Common.Names
 import Control.Monad.Catch
 import Elaborate.Term
 import Elaborate.Value
-import Text.Megaparsec (SourcePos)
+import Text.Megaparsec (SourcePos, sourcePosPretty)
 import Control.Exception (throw, throwIO)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Text.Printf (printf)
@@ -40,6 +40,9 @@ data UnifyError
   | StrengtheningError [Name] TM TM StrengtheningError
   deriving Exception
 
+quantityError :: ElabError
+quantityError = QuantityError
+
 instance Show UnifyError where
   show _ = "UnifyError..."
 
@@ -48,6 +51,7 @@ data ElabError
   | ExpectedFunction TM
   | NameNotInScope Name
   | UnifyErrorWhile TM TM UnifyError
+  | QuantityError
   deriving (Exception)
 
 instance Show ElabError where
@@ -57,10 +61,11 @@ data Err = Err [Name] ElabError (Maybe SourcePos)
   deriving (Show)
 
 instance Exception Err where
-  displayException (Err ns1 e1 p) = case e1 of
+  displayException (Err ns1 e1 p) = maybe id (\p' -> (sourcePosPretty p' ++) . (": "++)) p $ case e1 of
     NameNotInScope x -> "Name not in scope: " ++ show x
     ExpectedFunction ty -> "Expected a function type, instead inferred:\n\n  " ++ showTm ns1 ty
     IcitMismatch i i' -> printf "Function icitness mismatch: expected %s, got %s." (show i) (show i')
+    QuantityError -> "Quantity mismatch"
     UnifyErrorWhile lhs1 rhs1 e2 ->
       let err1 = case e2 of
             UnifyError ns lhs rhs -> printf

@@ -1,0 +1,1 @@
+let const  : {A B} → A → B → A = λ x y. x in U

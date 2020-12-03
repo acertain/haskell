@@ -8,10 +8,11 @@ import Data.Functor ((<&>))
 import Elaborate.Evaluation
 import Elaborate.Term
 import Elaborate.Value
+import Common.Qty
 
 -- | Unfold all metas and evaluate meta-headed spines, but don't evaluate
 --   anything else.
-zonk :: Vals -> TM -> IO TM
+zonk :: GivenSolver => Vals -> TM -> IO TM
 zonk vs t0 = go t0 where
 
   goSp :: TM -> IO (Either Val TM)
@@ -61,7 +62,7 @@ zonk vs t0 = go t0 where
 #ifdef FCIF
     Tel          -> pure Tel
     TNil         -> pure TNil
-    TCons x q t u  -> TCons x q <$> go t <*> goBind u
+    TCons x t u  -> TCons x <$> go t <*> goBind u
     Rec a        -> Rec <$> go a
     Tnil         -> pure Tnil
     Tcons t u    -> Tcons <$> go t <*> go u

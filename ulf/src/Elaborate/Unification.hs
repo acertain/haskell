@@ -40,6 +40,8 @@ import Elaborate.Occurrence
 #endif
 import System.IO.Unsafe (unsafeInterleaveIO)
 import Control.Exception (catch, throwIO, try)
+import Data.Data.Lens
+import Solver.Sat.CaDiCaL (simplifyBit)
 
 lvlName :: Int -> [Name] -> Lvl -> Name
 lvlName ln ns x = ns !! (ln - x - 1)
@@ -55,7 +57,7 @@ bindSrc x = bind x NOSource
 
 -- | Lift ("skolemize") a value in an extended context to a function in a
 --   non-extended context.
-liftVal :: Context -> Val -> EVal
+liftVal :: GivenSolver => Context -> Val -> EVal
 liftVal cxt t = \ ~x -> do
   tm <- uneval (cxt^.len+1) t
   eval (VDef (cxt^.vals) x) tm
@@ -74,7 +76,7 @@ makeLenses ''Str
 -- | Strengthens a value, returns a unevaled normal result. This performs scope
 --   checking, meta occurs checking and (recursive) pruning at the same time.
 --   May throw `StrengtheningError`.
-strengthen :: Str -> Val -> IO TM
+strengthen :: GivenSolver => Str -> Val -> IO TM
 strengthen str0 = go where
 
   -- we only prune all-variable spines with illegal var occurrences,
@@ -133,6 +135,7 @@ strengthen str0 = go where
         pty <- eval VNil prunedTy
         -- TODO: do we need to do anything more for qtys here?
         m' <- newMeta $ Unsolved mempty pty
+        print "prune"
 
         let argNum = length pruning
             body = go' pruning metaTy (Meta m') 0 where
@@ -189,7 +192,7 @@ strengthen str0 = go where
     VTel             -> pure Tel
     VRec a           -> Rec <$> go a
     VTNil            -> pure TNil
-    VTCons x q a b   -> TCons x q <$> go a <*> goBind b
+    VTCons x a b     -> TCons x <$> go a <*> goBind b
     VTnil            -> pure Tnil
     VTcons t' u      -> Tcons <$> go t' <*> go u
     VPiTel x q a b   -> PiTel x q <$> go a <*> goBind b
@@ -218,42 +221,49 @@ skipStr (Str c d r o) = Str c (d + 1) r o
 
 closingTy :: GivenSolver => Context -> TY -> IO (TY, Qtys)
 closingTy cxt = go (cxt^.types) (cxt^.names) (cxt^.len) where
-  go TyNil [] _ b = pure (b, mempty)
+  go TyNil [] _ b = pure (b, EmptyQtys)
   go (TySnoc tys Def _) (_:ns) d b = over _2 wknQtys <$> go tys ns (d-1) (Skip b)
 #ifdef FCIF
   go (TySnoc tys Bound (VRec a)) (x:ns) d b = do
     a' <- uneval (d-1) a
-    q <- qtyVar
-    over _2 (consQtys q) <$> go tys ns (d-1) (PiTel x q a' b)
+    q <- newSQtys
+    over _2 (flip SnocSQtys q) <$> go tys ns (d-1) (PiTel x q a' b)
 #endif
   go (TySnoc tys Bound a) (x:ns) d b = do
     a' <- uneval (d-1) a
     q <- qtyVar
-    over _2 (consQtys q) <$> go tys ns (d-1) (Pi x Explicit q a' b)
+    over _2 (flip SnocQty q) <$> go tys ns (d-1) (Pi x Explicit q a' b)
   go _ _ _ _ = panic
 
 -- | Close a term by wrapping it in `Int` number of lambdas, while taking the domain
 --   types from the `VTy`, and the binder names from a list. If we run out of provided
 --   binder names, we pick the names from the Pi domains.
-closingTm :: VTy -> Int -> [Name] -> TM -> IO TM
-closingTm = go 0 mempty where
+closingTm :: GivenSolver => VTy -> Int -> [Name] -> TM -> IO TM
+closingTm = go 0 EmptyQtys TyNil where
   getName []     x = x
   getName (x:_)  _ = x
 
-  go !_ !qs !_ 0 !_ rhs = do
+  go !d !qs ts !_ 0 !_ rhs = do
+    v <- eval (vSkipN d) rhs
+    -- TODO: is oneQty correct here?
+    qs' <- inferQtys ts d (Left oneQty) v
+    -- print =<< template simplifyBit qs'
+    qtysEq qs qs'
     pure rhs
-  go d qs ty l xs rhs = force ty >>= \case
+  go d qs ts ty l xs rhs = force ty >>= \case
     VPi (getName xs -> x) i q a b  -> do
       a' <- b (VVar d) 
       bd <- uneval d a 
-      Lam x i bd <$> go (d + 1) (consQtys q qs) a' (l-1) (drop 1 xs) rhs
+      Lam x i bd <$> go (d + 1) (SnocQty qs q) (TySnoc ts Bound a) a' (l-1) (drop 1 xs) rhs
 #ifdef FCIF
     VPiTel (getName xs -> x) q a b -> do
       a' <- b (VVar d)
       bd <- uneval d a
-      LamTel x bd <$> go (d + 1) (consQtys q qs) a' (l-1) (drop 1 xs) rhs
+      LamTel x bd <$> go (d + 1) (SnocSQtys qs q) (TySnoc ts Bound (VRec a)) a' (l-1) (drop 1 xs) rhs
 #endif
     _ -> panic
+
+
 
 #ifdef FCIF
 newConstancy :: GivenSolver => Context -> VTy -> EVal -> IO ()
@@ -317,7 +327,7 @@ unifyWhile cxt l r = unify cxt l r `catch` \e -> do
   r' <- unsafeInterleaveIO (uneval (cxt^.len) l)
   reportM (cxt^.names) $ UnifyErrorWhile l' r' e
 
-checkSp :: Spine -> IO (Renaming, Lvl, [Lvl])
+checkSp :: GivenSolver => Spine -> IO (Renaming, Lvl, [Lvl])
 checkSp s0 = do
   s1 <- forceSp s0
   go s1 <&> over _3 reverse 
@@ -409,11 +419,11 @@ unify cxt l r = go l r where
     (VTel, VTel)                             -> pure ()
     (VRec a, VRec a')                        -> go a a'
     (VTNil, VTNil)                           -> pure ()
-    (VTCons x q a b, VTCons _ q' a' b')      -> qtyEq q q' >> go a a' >> goBind x a b b'
+    (VTCons x a b, VTCons _ a' b')           -> go a a' >> goBind x a b b'
     (VTnil, VTnil)                           -> pure ()
     (VTcons t u, VTcons t' u')               -> go t t' >> go u u'
-    (VPiTel x q a b, VPiTel _ q' a' b')      -> qtyEq q q' >> go a a' >> goBind x (VRec a) b b'
-    -- TODO: invalid?
+    (VPiTel x q a b, VPiTel _ q' a' b')      -> sQtysEq q q' >> go a a' >> goBind x (VRec a) b b'
+    -- TODO: unify a a'?
     (VLamTel x a t, VLamTel _  _ t')         -> goBind x (VRec a) t t'
     (VLamTel x a t, t')                      -> goBind x (VRec a) t (evalAppTel a t')
     (t, VLamTel x' a' t')                    -> goBind x' (VRec a') (evalAppTel a' t) t'
@@ -434,12 +444,14 @@ unify cxt l r = go l r where
         vm <- do
           (_,m) <- freshMeta cxt' VTel
           eval (cxt'^.vals) m
-        go a $ VTCons x' (mulQty q q') a' $ liftVal cxt vm
+        qtyEq q' =<< headSQtys q
+        go a $ VTCons x' a' $ liftVal cxt vm
         let b2 ~x1 ~x2 = b (VTcons x1 x2)
         newConstancy cxt' vm $ b2 $ VVar (cxt^.len)
-        goBind x' a' 
-          (\ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x q t' (b2 x1)) b'
+        goBind x' a'
+          (\ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x (tailSQtys q) t' (b2 x1)) b'
       else do
+        sQtysEqNil q
         go a VTNil
         r' <- b VTnil
         go r' t
@@ -451,20 +463,23 @@ unify cxt l r = go l r where
         vm <- do
           (_,m) <- freshMeta cxt' VTel
           eval (cxt'^.vals) m
-        go a $ VTCons x' (mulQty q q') a' $ liftVal cxt vm
+        qtyEq q' =<< headSQtys q
+        go a $ VTCons x' a' $ liftVal cxt vm
         let b2 ~x1 ~x2 = b (VTcons x1 x2)
         newConstancy cxt' vm $ b2 $ VVar (cxt^.len)
-        goBind x' a' b' \ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x q t' (b2 x1)
+        goBind x' a' b' \ ~x1 -> unsafeInterleaveIO (liftVal cxt vm x1) <&> \t' -> VPiTel x (tailSQtys q) t' (b2 x1)
       else do
+        sQtysEqNil q
         go a VTNil
         r' <- b VTnil
         go t r'
-    -- TODO: set q = zero?
     (VPiTel _ q a b, t) -> do
+      sQtysEqNil q
       go a VTNil
       r' <- b VTnil
       go r' t
     (t, VPiTel _ q a b) -> do
+      sQtysEqNil q
       go a VTNil
       r' <- b VTnil
       go t r'
@@ -492,51 +507,60 @@ unify cxt l r = go l r where
 -- possible optimization: checkQtys (use in solveMeta, instead of inferQtys & constrain le)
 -- takes avail qtys, splits qtys into needed for value & left over (returned)
 -- tl needs to match ctx len in Val (for HVar)
-inferQtys :: Types -> Int -> Qty -> Val -> IO Qtys
+--
+inferQtys :: Types -> Int -> Either Qty SQtys -> Val -> IO Qtys
 inferQtys tys !tl m = \case
   VNe h spi -> snd <$> go spi where
     go :: Spine -> IO (VTy, Qtys)
     go SNil = case h of
       HMeta mv -> do
         Unsolved _ ty <- readMeta mv
-        pure (ty, mempty)
+        pure (ty, zeroQtys tl)
       HVar v -> pure $ f tys (tl - v - 1) where
         f :: Types -> Int -> (VTy, Qtys)
-        f (TySnoc _ _ t) 0 = (t, Qtys [m])
-        f (TySnoc ts _ _) !i = let (x,y) = f ts (i-1) in (x,wknQtys y)
+        f (TySnoc _ _ t) 0 = (t, wknQtysN (tl - v - 1) $ either (flip SnocQty) (flip SnocSQtys) m $ zeroQtys v)
+        f (TySnoc ts _ _) !i = f ts (i-1)
         f _ _ = panic
     go (SApp _ sp x) = go sp >>= \case
       (VPi _ _ q _ b, qs) -> do
         y <- b x
-        z <- inferQtys tys tl (mulQty q m) x
+        z <- inferQtys tys tl (either (Left . mulQty q) panic m) x
         pure (y, z <> qs)
       _ -> panic
     go (SAppTel _ sp x) = go sp >>= \case
       (VPiTel _ q _ b, qs) -> do
         y <- b x
-        z <- inferQtys tys tl (mulQty q m) x
+        z <- inferQtys tys tl (either (Right . flip mulSQtys q) panic m) x
         pure (y, z <> qs)
       _ -> panic
     go (SCar sp) = go sp >>= \case
-      (VTCons _ q a _, qs) -> do
+      (VTCons _ a _, qs) -> do
         undefined
       _ -> panic
     go (SCdr s) = panic
   VPi _ _ _ x y -> do
     y' <- y (VVar tl)
-    (<>) <$> inferQtys tys tl m x <*> (tailQtys <$> inferQtys (TySnoc tys Bound x) (tl+1) m y')
+    qs <- inferQtys (TySnoc tys Bound x) (tl+1) m y'
+    (<>) (tailQtys qs) <$> inferQtys tys tl m x
   VLam _ _ x y -> do
     y' <- y (VVar tl)
     tailQtys <$> inferQtys (TySnoc tys Bound x) (tl+1) m y'
-  VU -> pure mempty
-  VTel -> pure mempty
-  VRec v -> _
-  VTNil -> pure mempty
-  VTCons _ q x y -> _
-  VTnil -> pure mempty
-  VTcons x y -> _
-  VPiTel _ q x b -> _
-  VLamTel _ x b -> _
+  VU -> pure $ zeroQtys tl
+  VTel -> pure $ zeroQtys tl
+  VRec v -> undefined
+  VTNil -> pure $ zeroQtys tl
+  VTCons _ x y -> case m of
+    Left _ -> do
+      y' <- y (VVar tl)
+      qs <- inferQtys (TySnoc tys Bound x) (tl+1) m y'
+      (<>) (tailQtys qs) <$> inferQtys tys tl m x     
+  VTnil -> pure $ zeroQtys tl
+  VTcons x y -> undefined
+  VPiTel _ _ x y -> do
+    y' <- y (VVar tl)
+    qs <- inferQtys (TySnoc tys Bound (VRec x)) (tl+1) m y'
+    (<>) (tailQtys qs) <$> inferQtys tys tl m x    
+  VLamTel _ x b -> undefined
 
 
 

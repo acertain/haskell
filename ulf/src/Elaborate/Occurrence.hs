@@ -22,6 +22,7 @@ import Control.Applicative (liftA2)
 import Data.HashSet qualified as HS
 import Elaborate.Evaluation
 import Elaborate.Value
+import Common.Qty
 
 data Occurs
   = Rigid       -- ^ At least one occurrence is not in the spine of any meta.
@@ -48,7 +49,7 @@ occurrence ms
 (><) = liftA2 (<>)
 
 -- | Occurs check for the purpose of constancy constraint solving.
-occurs :: Lvl -> Lvl -> Val -> IO Occurs
+occurs :: GivenSolver => Lvl -> Lvl -> Val -> IO Occurs
 occurs d0 topX v0 = occurs' d0 mempty v0 where
 
   occurs' :: Lvl -> Metas -> Val -> IO Occurs
@@ -77,7 +78,7 @@ occurs d0 topX v0 = occurs' d0 mempty v0 where
       VTel          -> pure mempty
       VRec a        -> go a
       VTNil         -> pure mempty
-      VTCons _ _ a b  -> go a >< goBind b
+      VTCons _ a b  -> go a >< goBind b
       VTnil         -> pure mempty
       VTcons t u    -> go t >< go u
       VPiTel _ _ a b  -> go a >< goBind b

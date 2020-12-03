@@ -50,42 +50,43 @@ evalMeta m = readMeta m <&> \case
 
 
 #ifdef FCIF
-evalCar :: Val -> IO Val
+evalCar :: GivenSolver => Val -> IO Val
 evalCar (VTcons t _) = pure t
 evalCar (VNe h sp) = pure $ VNe h (SCar sp)
 evalCar (VLamTel x a t) = evalLamTel pure x a t >>= evalCar
 evalCar _ = panic
 
-evalCdr :: Val -> IO Val
+evalCdr :: GivenSolver => Val -> IO Val
 evalCdr (VTcons _ u) = pure u
 evalCdr (VNe h sp) = pure $ VNe h (SCdr sp)
 evalCdr (VLamTel x a t) = evalLamTel pure x a t >>= evalCdr
 evalCdr _ = panic
 
-evalPiTel :: EVal -> Name -> Qty -> VTy -> EVal -> IO Val
+evalPiTel :: GivenSolver => EVal -> Name -> SQtys -> VTy -> EVal -> IO Val
 evalPiTel k x q a0 b = force a0 >>= \case
   VTNil -> b VTnil >>= k
-  VTCons _ q2 a as -> pure
+  VTCons _ a as -> do
+    hq <- headSQtys q
     let (x',x'') = splitName x
-    in VPi x' Implicit (mulQty q q2) a \ ~x1 -> do
+    pure $ VPi x' Implicit hq a \ ~x1 -> do
       ~x1v <- as x1
-      evalPiTel pure x'' q x1v \ ~x2 -> b (VTcons x1 x2)
+      evalPiTel pure x'' (tailSQtys q) x1v \ ~x2 -> b (VTcons x1 x2)
   a -> pure $ VPiTel x q a b
 
-evalLamTel :: EVal -> Name -> VTy -> EVal -> IO Val
+evalLamTel :: GivenSolver => EVal -> Name -> VTy -> EVal -> IO Val
 evalLamTel k x a0 t = force a0 >>= \case
   VTNil -> t VTnil >>= k
-  VTCons _ _ a as -> pure
+  VTCons _ a as -> pure
     let (x',x'') = splitName x
     in VLam x' Implicit a \ ~x1 -> do
       ~x1v <- as x1
       evalLamTel pure x'' x1v \ ~x2 -> t (VTcons x1 x2)
   a -> pure $ VLamTel x a t
 
-evalAppTel ::  VTy -> Val -> Val -> IO Val
+evalAppTel :: GivenSolver => VTy -> Val -> Val -> IO Val
 evalAppTel a0 t u = force a0 >>= \case
   VTNil -> pure t
-  VTCons _ _ _ as -> do
+  VTCons _ _ as -> do
     u1 <- evalCar u
     u1v <- as u1
     u2 <- evalCdr u
@@ -97,7 +98,7 @@ evalAppTel a0 t u = force a0 >>= \case
     _ -> panic
 #endif
 
-evalApp :: Icit -> Val -> Val -> IO Val
+evalApp :: GivenSolver => Icit -> Val -> Val -> IO Val
 evalApp _ (VLam _ _ _ t)  u = t u
 evalApp i (VNe h sp)      u = pure $ VNe h (SApp i sp u)
 #ifdef FCIF
@@ -107,7 +108,7 @@ evalApp i (VLamTel x a t) u = do
 #endif
 evalApp _                _ _ = panic
 
-evalAppSp :: Val -> Spine -> IO Val
+evalAppSp :: GivenSolver => Val -> Spine -> IO Val
 evalAppSp h = go where
   go SNil             = pure h
   go (SApp i sp u)    = do sp' <- go sp; evalApp i sp' u
@@ -117,7 +118,7 @@ evalAppSp h = go where
   go (SCdr sp)      = go sp >>= evalCdr
 #endif
 
-force :: Val -> IO Val
+force :: GivenSolver => Val -> IO Val
 force = \case
   v0@(VNe (HMeta m) sp) -> readMeta m >>= \case
     Unsolved{} -> pure v0
@@ -129,7 +130,7 @@ force = \case
 #endif
   v -> pure v
 
-forceSp :: Spine -> IO Spine
+forceSp :: GivenSolver => Spine -> IO Spine
 forceSp sp =
   -- This is a cheeky hack, the point is that (VVar (-1)) blocks computation, and
   -- we get back the new spine.  We use (-1) in order to make the hack clear in
@@ -138,7 +139,7 @@ forceSp sp =
     VNe _ sp' -> pure sp'
     _ -> panic
 
-eval :: Vals -> TM -> IO Val
+eval :: GivenSolver => Vals -> TM -> IO Val
 eval vs = go where
   go = \case
     Var x        -> pure $ evalVar x vs
@@ -154,7 +155,7 @@ eval vs = go where
 #ifdef FCIF
     Tel          -> pure VTel
     TNil         -> pure VTNil
-    TCons x q a b  -> unsafeInterleaveIO (go a) <&> \a' -> VTCons x q a' (goBind b)
+    TCons x a b  -> unsafeInterleaveIO (go a) <&> \a' -> VTCons x a' (goBind b)
     Rec a        -> VRec <$> go a
     Tnil         -> pure VTnil
     Tcons t u    -> VTcons <$> unsafeInterleaveIO (go t) <*> unsafeInterleaveIO (go u)
@@ -176,7 +177,7 @@ eval vs = go where
 
   goBind t x = eval (VDef vs x) t
 
-uneval :: Lvl -> Val -> IO TM
+uneval :: GivenSolver => Lvl -> Val -> IO TM
 uneval d = go where
   go v = force v >>= \case
     VNe h sp0 ->
@@ -198,7 +199,7 @@ uneval d = go where
     VTel          -> pure Tel
     VRec a        -> Rec <$> go a
     VTNil         -> pure TNil
-    VTCons x q a as -> TCons x q <$> go a <*> goBind as
+    VTCons x a as -> TCons x <$> go a <*> goBind as
     VTnil         -> pure Tnil
     VTcons t u    -> Tcons <$> go t <*> go u
     VPiTel x q a b  -> PiTel x q <$> go a <*> goBind b
@@ -207,7 +208,7 @@ uneval d = go where
 
   goBind t = t (VVar d) >>= uneval (d + 1)
 
-uneval' :: Lvl -> Val -> IO TM
+uneval' :: GivenSolver => Lvl -> Val -> IO TM
 uneval' d = go where
   go = \case
     VNe h sp0 ->
@@ -229,7 +230,7 @@ uneval' d = go where
     VTel          -> pure Tel
     VRec a        -> Rec <$> go a
     VTNil         -> pure TNil
-    VTCons x q a as -> TCons x q <$> go a <*> goBind as
+    VTCons x a as -> TCons x <$> go a <*> goBind as
     VTnil         -> pure Tnil
     VTcons t u    -> Tcons <$> go t <*> go u
     VPiTel x q a b  -> PiTel x q <$> go a <*> goBind b
@@ -239,7 +240,7 @@ uneval' d = go where
   goBind t = t (VVar d) >>= uneval (d + 1)
 
 
-nf :: Vals -> TM -> IO TM
+nf :: GivenSolver => Vals -> TM -> IO TM
 nf vs t = do
   v <- eval vs t
   uneval 0 v

@@ -8,7 +8,11 @@ import Control.Exception
 import Text.Megaparsec (parse, errorBundlePretty)
 import System.Exit
 import Elaborate.Check (infer)
-import Elaborate.Value (runM, emptyCtx)
+import Elaborate.Value
+import Common.Qty
+import Elaborate.Term
+import Elaborate.Zonk
+import Solver.Sat.CaDiCaL
 
 type Command = ParserInfo (IO ())
 
@@ -18,8 +22,12 @@ checkFile p _ = readFile p >>= \txt ->
     Left e -> do
       putStrLn $ errorBundlePretty e
       pure False
-    Right r -> do
-      _ <- runM $ infer emptyCtx r
+    Right r -> runSolver $ do
+      (qs, tm, ty) <- infer emptyCtx r
+      tm' <- zonk VNil tm
+      s <- showTmIO [] tm'
+      print_statistics
+      putStrLn s
       pure True
 
 runCheck :: [FilePath] -> Bool -> IO ()

@@ -15,7 +15,8 @@
 
 module Solver.Sat.CaDiCaL (
   Bit(..), Literal, (.&&), (.||), (.==), notb, trueb, falseb, exists,
-  GivenSAT, withSolver, assert, evalBit, fixedBit, solveWith, solve
+  GivenSAT, withSolver, assert, evalBit, fixedBit, solveWith, solve,
+  simplify, print_statistics, withSolverOpts, simplifyBit
 ) where
 
 import Foreign
@@ -43,10 +44,16 @@ literalTrue = Literal 1
 negateLiteral :: Literal -> Literal
 negateLiteral (Literal x) = Literal (-x)
 
-data Bit = And ![Bit] | Not !Bit | Var !Literal
+data Bit = And ![Bit] | Not !Bit | Var {-# UNPACK #-} !Literal
   deriving (Data, Typeable, Show, Eq, Ord, Generic, Hashable)
 
+
+
 (.&&) :: Bit -> Bit -> Bit
+Var (Literal 1) .&& b = b
+Var (Literal (-1)) .&& _ = falseb
+b .&& Var (Literal 1) = b
+_ .&& Var (Literal (-1)) = falseb
 And as .&& And bs = And (as ++ bs)
 And as .&& b = And (b:as)
 a .&& And bs = And (a:bs)
@@ -56,7 +63,7 @@ a .&& b = And [a,b]
 x .|| y = notb (notb x .&& notb y)
 
 (.==) :: Bit -> Bit -> Bit
-x .== y = (x .&& y) .|| (notb x .&& notb y)
+x .== y = (notb x .|| y) .&& (notb y .|| x)
 
 notb :: Bit -> Bit
 notb (Not b) = b
@@ -65,9 +72,8 @@ notb x = Not x
 
 trueb :: Bit
 trueb = Var literalTrue
-
 falseb :: Bit
-falseb = Var literalTrue
+falseb = Var literalFalse
 
 
 data Clause = Clause [Literal]
@@ -98,11 +104,15 @@ exists :: GivenSAT => IO Bit
 exists = Var <$> literalExists
 
 withSolver :: (GivenSAT => IO a) -> IO a
-withSolver x = do
+withSolver = withSolverOpts []
+
+withSolverOpts :: [(String,Int)] -> (GivenSAT => IO a) -> IO a
+withSolverOpts os x = do
   cCadical <- ccadical_init
   nextVar <- newIORef 2
   stableMap <- newIORef mempty
   let ?satState = State {..}
+  for_ os (\(a,b) -> set_option a b)
   assert $ Var $ Literal 1
   r <- x
   ccadical_release cCadical
@@ -158,20 +168,31 @@ runBit b = do
   formulaAnd out inpLs = Formula $
     Clause (out : map negateLiteral inpLs) : map (\inp -> Clause [negateLiteral out, inp]) inpLs
 
+simplifyBit :: GivenSAT => Bit -> IO Bit
+simplifyBit b = lookupBit b >>= \case
+  Just l -> Var <$> literalFixed l
+  Nothing -> go b
+  where
+    go (And ls) = foldr (.&&) trueb <$> traverse simplifyBit ls
+    go (Not l) = notb <$> simplifyBit l
+    go (Var v) = pure $ Var v
+
+
 lookupBit :: GivenSAT => Bit -> IO (Maybe Literal)
+lookupBit (Var l) = pure $ Just l
 lookupBit b = do
   sn <- makeStableName $! b
   m <- readIORef (stableMap ?satState)
   pure $ M.lookup sn m
 
-evalBit :: GivenSAT => Bit -> IO Bool
+evalBit :: GivenSAT => Bit -> IO (Maybe Bool)
 evalBit b = lookupBit b >>= \case
   Just l -> e l
   Nothing -> case b of
     Var l -> e l
-    And xs -> and <$> traverse evalBit xs
-    Not x -> not <$> evalBit x
-  where e l = maybe (error "runBit: unknown variable (call solve first!)") id <$> evalLiteral l
+    And xs -> fmap and . sequence <$> traverse evalBit xs
+    Not x -> fmap not <$> evalBit x
+  where e l = evalLiteral l
 
 fixedBit :: GivenSAT => Bit -> IO (Maybe Bool)
 fixedBit b = lookupBit b >>= \case
@@ -204,12 +225,25 @@ solveWith ls = do
   for_ ls' \(Literal l) -> ccadical_assume s l
   ccadical_solve s >>= \case
     0 -> pure Nothing
-    10 -> pure $ Just True
-    20 -> pure $ Just False
+    10 -> do
+      pure $ Just True
+    20 -> do
+      pure $ Just False
     _ -> error "invalid return value from ccadical_solve"
 
 solve :: GivenSAT => IO (Maybe Bool)
 solve = solveWith []
+
+simplify ::  GivenSAT => IO ()
+simplify = ccadical_simplify (cCadical ?satState) >> pure ()
+
+ 
+
+print_statistics :: GivenSAT => IO ()
+print_statistics = ccadical_print_statistics (cCadical ?satState)
+
+set_option :: GivenSAT => String -> Int -> IO ()
+set_option s x = withCString s \s' -> ccadical_set_option (cCadical ?satState) s' (fromIntegral x)
 
 foreign import ccall "ccadical_init" ccadical_init :: IO (Ptr CCadicalState)
 foreign import ccall "ccadical_release" ccadical_release :: Ptr CCadicalState -> IO ()
@@ -221,3 +255,9 @@ foreign import ccall "ccadical_solve" ccadical_solve :: Ptr CCadicalState -> IO 
 foreign import ccall "ccadical_val" ccadical_val :: Ptr CCadicalState -> CInt -> IO CInt
 
 foreign import ccall "ccadical_fixed" ccadical_fixed :: Ptr CCadicalState -> CInt -> IO CInt
+
+foreign import ccall "ccadical_print_statistics" ccadical_print_statistics :: Ptr CCadicalState -> IO ()
+
+foreign import ccall "ccadical_simplify" ccadical_simplify :: Ptr CCadicalState -> IO CInt
+
+foreign import ccall "ccadical_set_option" ccadical_set_option :: Ptr CCadicalState -> CString -> CInt -> IO ()

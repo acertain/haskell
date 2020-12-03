@@ -15,6 +15,7 @@ module Elaborate.Check where
 
 import Common.Icit
 import Common.Names
+import Common.Qty
 import Control.Monad (unless)
 import Control.Lens hiding (Context)
 import Elaborate.Error
@@ -24,6 +25,8 @@ import Elaborate.Value
 import Elaborate.Unification
 import Source.Term qualified as Raw
 import System.IO.Unsafe (unsafeInterleaveIO)
+import Solver.Sat.CaDiCaL (simplifyBit)
+import Data.Data.Lens
 
 -- | Define a new variable.
 define :: Name -> VTy -> Val -> Context -> Context
@@ -81,12 +84,12 @@ infer :: GivenSolver => Context -> Raw.Term -> IO (Qtys, TM, VTy)
 infer cxt = \case
   Raw.Loc p t -> addSourcePos p (infer cxt t)
 
-  Raw.U -> pure (mempty, U, VU)
+  Raw.U -> pure (zeroQtys (cxt ^. len), U, VU)
 
   Raw.Var x -> do
     let go :: [Name] -> [NameOrigin] -> Types -> Int -> IO (Qtys, TM, VTy)
-        go (y:_) (NOSource:_) (TySnoc _ _ a) i | SourceName x 0 == y = pure (Qtys [oneQty],Var i,a)
-        go (_:xs) (_:os) (TySnoc as _ _) i = over _1 wknQtys <$> go xs os as (i + 1)
+        go (y:_) (NOSource:_) (TySnoc _ _ a) i | SourceName x 0 == y = pure (wknQtysN i $ SnocQty (zeroQtys ((cxt ^. len) - i - 1)) oneQty,Var i,a)
+        go (_:xs) (_:os) (TySnoc as _ _) i = go xs os as (i + 1)
         go [] [] TyNil _ = report (cxt^.names) $ NameNotInScope (SourceName x 0)
         go _ _ _ _ = panic
     go (cxt^.names) (cxt^.nameOrigin) (cxt^.types) 0
@@ -132,7 +135,7 @@ check :: GivenSolver => Context -> Raw.Term -> VTy -> IO (Qtys, TM)
 check cxt topT ~topA0 = force topA0 >>= \ ftopA -> case (topT, ftopA) of
   (Raw.Loc p t, a) -> addSourcePos p (check cxt t a)
 
-  (Raw.Lam (sourceName -> x) ann0 i t0, VPi _ i' _ a b) | i == i' -> do
+  (Raw.Lam (sourceName -> x) ann0 i t0, VPi _ i' q a b) | i == i' -> do
     ann' <- case ann0 of
       Just ann1 -> do
         (_, ann) <- check cxt ann1 VU
@@ -143,12 +146,13 @@ check cxt topT ~topA0 = force topA0 >>= \ ftopA -> case (topT, ftopA) of
     (qs, t) <- do
       ty <- b (VVar (cxt^.len))
       check (bind x NOSource a cxt) t0 ty
+    qtyEq q (headQtys qs)
     pure (tailQtys qs, Lam x i ann' t)
 
   (t0, VPi x Implicit q a b) -> do
     ty <- b (VVar (cxt^.len))
     (qs,t) <- check (bind x NOInserted a cxt) t0 ty
-    qtyEq (headQtys qs) q
+    qtyEq q (headQtys qs)
     a' <- uneval (cxt^.len) a
     pure (tailQtys qs, Lam x Implicit a' t)
 
@@ -162,8 +166,7 @@ check cxt topT ~topA0 = force topA0 >>= \ ftopA -> case (topT, ftopA) of
     let cxt' = bind x NOInserted (VRec vdom) cxt
     (q2, t, liftVal cxt -> a) <- insert cxt' $ infer cxt' t0
     newConstancy cxt vdom a
-    unifyWhile cxt topA0 (VPiTel x vdom a)
-    -- TODO: i guess? still need to figure out how 2 deal w/ tels + qtys
+    unifyWhile cxt topA0 (VPiTel x (headQtysS q2) vdom a)
     pure (tailQtys q2, LamTel x d t)
 #endif
 

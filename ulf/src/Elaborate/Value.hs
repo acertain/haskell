@@ -85,6 +85,10 @@ data Vals
   | VSkip !Vals
   | VDef !Vals Val
 
+vSkipN :: Int -> Vals
+vSkipN 0 = VNil
+vSkipN n = VSkip (vSkipN (n-1))
+
 -- TODO: imo there should by a TySnocRec ?
 data Types
   = TyNil
@@ -132,10 +136,10 @@ data Val
   | VTel
   | VRec Val
   | VTNil
-  | VTCons !Name !Qty Val EVal
+  | VTCons !Name Val EVal
   | VTnil
   | VTcons Val Val
-  | VPiTel !Name !Qty Val EVal
+  | VPiTel !Name !SQtys Val EVal
   | VLamTel !Name Val EVal
 #endif
 
