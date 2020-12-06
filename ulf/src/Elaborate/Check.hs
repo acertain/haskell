@@ -38,10 +38,10 @@ insert' :: GivenSolver => Context -> IO (Qtys, TM, VTy) -> IO (Qtys, TM, VTy)
 insert' cxt act = do
   (qs1, t0, va0) <- act
   let go qs t va = force va >>= \case
-        VPi _ Implicit _ a b -> do
+        VPi _ Implicit q a b -> do
           (qs',m) <- freshMeta cxt a
           mv' <- b =<< eval (cxt^.vals) m
-          go (qs <> qs') (App Implicit t m) mv'
+          go (qs <> mulQtys q qs') (App Implicit t m) mv'
         va' -> pure (qs, t, va')
   go qs1 t0 va0
 
@@ -66,7 +66,6 @@ expectFn cxt tm i = do
       unless (i == i') $ report (cxt^.names) $ IcitMismatch i i'
       pure (qs1, t, q, a, b)
     va'@(VNe (HMeta _) _) -> do
-      -- NOTE: we ignore the quantities from the type metas here
       (m',_,a0) <- freshMeta' cxt VU
       a <- eval (cxt^.vals) a0
       let x = metaName m'
@@ -128,7 +127,6 @@ infer cxt = \case
     (q1,t) <- check cxt t0 va
     vt <- eval (cxt^.vals) t
     (q2, u', b) <- infer (define x va vt cxt) u
-    -- TODO: is the qty here right?
     pure (tailQtys q2 <> mulQtys (headQtys q2) q1, Let x a t u', b)
 
 check :: GivenSolver => Context -> Raw.Term -> VTy -> IO (Qtys, TM)
@@ -146,13 +144,13 @@ check cxt topT ~topA0 = force topA0 >>= \ ftopA -> case (topT, ftopA) of
     (qs, t) <- do
       ty <- b (VVar (cxt^.len))
       check (bind x NOSource a cxt) t0 ty
-    qtyEq q (headQtys qs)
+    qtyLe (headQtys qs) q
     pure (tailQtys qs, Lam x i ann' t)
 
   (t0, VPi x Implicit q a b) -> do
     ty <- b (VVar (cxt^.len))
     (qs,t) <- check (bind x NOInserted a cxt) t0 ty
-    qtyEq q (headQtys qs)
+    qtyLe (headQtys qs) q
     a' <- uneval (cxt^.len) a
     pure (tailQtys qs, Lam x Implicit a' t)
 

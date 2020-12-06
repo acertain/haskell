@@ -129,8 +129,13 @@ assertClause (Clause cl) = do
 
 assert :: GivenSAT => Bit -> IO ()
 assert (And bs) = for_ bs assert
+-- ersatz claims this results in more clauses(??) but it speeds up cadical so shrug
+assert (Not (And bs)) = do
+  ls <- traverse runBit bs
+  assertClause $ Clause $ foldMap (pure . negateLiteral) ls
 assert b = do
   l <- runBit b
+  -- TODO: check literalFixed here?
   assertClause $ Clause [l]
 
 -- | Convert a 'Bit' to a 'Literal'.

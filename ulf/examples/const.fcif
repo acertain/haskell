@@ -1,1 +1,3 @@
-let const  : {A B} → A → B → A = λ x y. x in U
+let const  : {A B} → A → B → A = λ x y. x in 
+let choose : {A} → A → A → A   = const in
+U

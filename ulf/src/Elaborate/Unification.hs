@@ -247,8 +247,7 @@ closingTm = go 0 EmptyQtys TyNil where
     v <- eval (vSkipN d) rhs
     -- TODO: is oneQty correct here?
     qs' <- inferQtys ts d (Left oneQty) v
-    -- print =<< template simplifyBit qs'
-    qtysEq qs qs'
+    qtysLe qs' qs
     pure rhs
   go d qs ts ty l xs rhs = force ty >>= \case
     VPi (getName xs -> x) i q a b  -> do
@@ -506,8 +505,8 @@ unify cxt l r = go l r where
 -- m = demand/multiplier
 -- possible optimization: checkQtys (use in solveMeta, instead of inferQtys & constrain le)
 -- takes avail qtys, splits qtys into needed for value & left over (returned)
--- tl needs to match ctx len in Val (for HVar)
 --
+-- tl needs to match ctx len in Val (for HVar)
 inferQtys :: Types -> Int -> Either Qty SQtys -> Val -> IO Qtys
 inferQtys tys !tl m = \case
   VNe h spi -> snd <$> go spi where

@@ -15,7 +15,7 @@ module Common.Qty (
 
   Q, Qty, knownQty, zeroQty, oneQty, mulQty, addQty,
 
-  qtyVar, qtyVal, qtyEq,
+  qtyVar, qtyVal, qtyEq, qtyLe, qtysLe,
 
   Qtys(..), mulQtys, wknQtys, headQtys, tailQtys, qtysEq, zeroQtys, wknQtysN, headQtysS,
 
@@ -40,7 +40,8 @@ import {-# SOURCE #-} Elaborate.Error
 type GivenSolver = (GivenSAT, ?cachedStableMap :: IORef (HM.HashMap (StableName ()) Any))
 
 runSolver :: (GivenSolver => IO a) -> IO a
-runSolver x = withSolverOpts [("lucky",0)] $ do
+runSolver x = withSolverOpts [("lucky",0)] do
+  --,("profile",3),("inprocessing",0),("decompose",0),("elim",0),("verbose",4)] $ do
   r <- newIORef mempty
   let ?cachedStableMap = r
   x
@@ -251,6 +252,26 @@ qtyEq (Qty a b c) (Qty x y z) = do
   --   Nothing -> error "solver error"
 
 
+-- a <= b = b can be weakened into a
+-- / if i have b i can use it as an a
+qtyLe :: (GivenSolver, HasCallStack) => Qty -> Qty -> IO ()
+-- or disable weakening here
+-- qtyLe = qtyEq
+qtyLe (Qty x y z) (Qty a b c) = do
+  assert e
+  solve >>= \case
+    Just True -> pure ()
+    Just False -> reportM [] quantityError
+    Nothing -> error "solver error"  
+  where e =     (x .|| notb a)
+            .&& (y .|| z .|| notb c)
+            .&& (y .|| z .|| notb b)
+            .&& (x .|| y .|| notb b)
+            .&& (notb x .|| notb y .|| z .|| notb c)
+            .&& (notb x .|| a .|| notb b .|| c)
+
+
+
 qtysEq :: GivenSolver => Qtys -> Qtys -> IO ()
 qtysEq EmptyQtys EmptyQtys = pure ()
 qtysEq (SnocQty as a) (SnocQty bs b) = qtyEq a b >> qtysEq as bs
@@ -261,12 +282,29 @@ qtysEq (SnocQty qs q) (WknQtysN n qs') = qtyEq q zeroQty >> qtysEq qs (wknQtysN 
 qtysEq (SnocSQtys qs q) (WknQtysN n qs') = sQtysEqZero q >> qtysEq qs (wknQtysN (n-1) qs')
 qtysEq x y = error $ "qtysEq: mismatched shape: " ++ show x ++ " == " ++ show y
 
-sQtysEqZero :: GivenSolver => SQtys -> IO ()
-sQtysEqZero x = do
+qtysLe :: GivenSolver => Qtys -> Qtys -> IO ()
+qtysLe EmptyQtys EmptyQtys = pure ()
+qtysLe (SnocQty as a) (SnocQty bs b) = qtyLe a b >> qtysLe as bs
+qtysLe (SnocSQtys as a) (SnocSQtys bs b) = sQtysLe a b >> qtysLe as bs
+qtysLe (WknQtysN n x) (WknQtysN m y) = qtysLe (wknQtysN (n-o) x) (wknQtysN (m-o) y)
+  where o = min n m
+qtysLe (SnocQty qs q) (WknQtysN n qs') = qtyLe q zeroQty >> qtysLe qs (wknQtysN (n-1) qs')
+qtysLe (WknQtysN n qs') (SnocQty qs q) = qtyLe zeroQty q >> qtysLe (wknQtysN (n-1) qs') qs
+qtysLe (WknQtysN n qs') (SnocSQtys qs q) = sQtysZeroLe q >> qtysLe (wknQtysN (n-1) qs') qs
+qtysLe x y = error $ "qtysLe: mismatched shape: " ++ show x ++ " == " ++ show y
+
+sQtysMapConstrain ::  GivenSolver => (Qty -> IO ()) -> SQtys -> IO ()
+sQtysMapConstrain f x = do
   r <- runCached x
   onQtysV r \case
     NilQV -> pure ()
-    ConsQV q qs -> qtyEq q zeroQty >> sQtysEqZero qs
+    ConsQV q qs -> f q >> sQtysMapConstrain f qs
+
+sQtysZeroLe :: GivenSolver => SQtys -> IO ()
+sQtysZeroLe = sQtysMapConstrain (\q -> qtyLe zeroQty q)
+
+sQtysEqZero :: GivenSolver => SQtys -> IO ()
+sQtysEqZero = sQtysMapConstrain (qtyEq zeroQty)
 
 sQtysEq :: GivenSolver => SQtys -> SQtys -> IO ()
 sQtysEq x y = do
@@ -275,6 +313,18 @@ sQtysEq x y = do
 
   onQtysV b (writeQtysV a)
   onQtysV a (writeQtysV b)
+
+sQtysLe :: GivenSolver => SQtys -> SQtys -> IO ()
+sQtysLe x y = do
+  a <- runCached x
+  b <- runCached y
+
+  onQtysV a (groundQtysV b)
+  onQtysV b (groundQtysV a)
+
+  onQtysV a \av -> onQtysV b \bv -> case (av,bv) of
+    (ConsQV q qs, ConsQV q' qs') -> qtyLe q q' >> sQtysLe qs qs'
+    (NilQV, NilQV) -> pure ()
 
 -- Qtys (n + 1) -> Qtys n
 tailQtys :: Qtys -> Qtys

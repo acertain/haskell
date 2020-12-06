@@ -15,6 +15,9 @@ strict
 linear
 erased
 
+
+
+
 -- generators -- U
 E ⊆ A = True -- /| 
 L ⊆ A = True -- / S
@@ -35,6 +38,7 @@ R ⊆ R = True
 S ⊆ S = True
 U ⊆ U = True
 _ ⊆ _ = False 
+
 
 
 x y z
@@ -60,19 +64,14 @@ R = 1 0 1
 starting again:
 
 
-E 0 1 0
-L 1 1 1
-A 0 0 1
-U 0 0 0
-S 1 0 0
-R 1 1 0
 
-U 0 0 0
-A 0 0 1
+
 E 0 1 0
+L 1 1 1
+A 0 0 1
+U 0 0 0
 S 1 0 0
 R 1 1 0
-L 1 1 1
 
 impossible:
 0 1 1
@@ -108,3 +107,49 @@ x y z + a b c = (x || a) (y && b) ((z && ~c && ~a) || (c && ~z && ~x))
 x y z * a b c = (x && a) ((y || b) && (y || ~a) && (b || ~x)) (z && c)
 
 
+
+
+
+⊆|ELARUS
+-+------
+E|TFTFTF
+L|FTTTTT
+A|FFTFTF
+R|FFFTTT
+U|FFFFTF
+S|FFFFTT
+
+in gray code order:
+
+U 0 0 0
+A 0 0 1
+  0 1 1
+E 0 1 0
+R 1 1 0
+L 1 1 1
+  1 0 1
+S 1 0 0
+
+so,
+
+0 _ _ <= 1 _ _ = False
+_ 0 0 <= _ _ 1 = False
+_ 0 0 <= _ 1 _ = False
+0 0 _ <= _ 1 _ = False
+1 1 0 <= _ _ 1 = False
+1 _ _ <= 0 1 0 = False
+_     <= _     = True
+
+
+x y z <= a b c =
+      (x .|| notb a)
+  .&& (y .|| z .|| notb c)
+  .&& (y .|| z .|| notb b)
+  .&& (x .|| y .|| notb b)
+  .&& (notb x .|| notb y .|| z .|| notb c)
+  .&& (notb x .|| a .|| notb b .|| c)
+
+TODO:
+ordering: E L > R A > S > U
+
+would be nice to have encoding such that more general = more zeroes, to get more general types from sat
