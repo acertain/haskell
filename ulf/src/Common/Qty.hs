@@ -255,19 +255,19 @@ qtyEq (Qty a b c) (Qty x y z) = do
 -- / if i have b i can use it as an a
 qtyLe :: (GivenSolver, HasCallStack) => Qty -> Qty -> IO ()
 -- or disable weakening here
--- qtyLe = qtyEq
-qtyLe (Qty x y z) (Qty a b c) = do
-  assert e
-  solve >>= \case
-    Just True -> pure ()
-    Just False -> reportM [] quantityError
-    Nothing -> error "solver error"  
-  where e =     (x .|| notb a)
-            .&& (y .|| z .|| notb c)
-            .&& (y .|| z .|| notb b)
-            .&& (x .|| y .|| notb b)
-            .&& (notb x .|| notb y .|| z .|| notb c)
-            .&& (notb x .|| a .|| notb b .|| c)
+qtyLe = qtyEq
+-- qtyLe (Qty x y z) (Qty a b c) = do
+--   assert e
+--   solve >>= \case
+--     Just True -> pure ()
+--     Just False -> reportM [] quantityError
+--     Nothing -> error "solver error"  
+--   where e =     (x .|| notb a)
+--             .&& (y .|| z .|| notb c)
+--             .&& (y .|| z .|| notb b)
+--             .&& (x .|| y .|| notb b)
+--             .&& (notb x .|| notb y .|| z .|| notb c)
+--             .&& (notb x .|| a .|| notb b .|| c)
 
 
 
