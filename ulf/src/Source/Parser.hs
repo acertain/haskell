@@ -25,6 +25,7 @@ import Prelude hiding (pi)
 import Text.Megaparsec
 import Text.Megaparsec.Char qualified as C
 import Text.Megaparsec.Char.Lexer qualified as L
+import Common.Qty (Q(..))
 
 underscore :: SourceName
 underscore = fromString "_"
@@ -87,7 +88,7 @@ op s = try do
 
 atom :: Parser Term
 atom = (loc (Var <$> ident
-          <|> U <$ kw "U"
+          <|> U_ <$ kw "U"
           <|> Hole <$ kw "_"
        ) <|> parens term)
 
@@ -111,14 +112,25 @@ let_ = go <$ symbol "let" <*> ident <*> optional (colon *> term)
           <* char '=' <*> term <* symbol "in" <*> term where
   go x ann t u = Let x (fromMaybe Hole ann) t u
 
+qty :: Parser Q
+qty = (E <$ kw "E") <|>
+      (L <$ kw "L") <|>
+      (A <$ kw "A") <|>
+      (R <$ kw "R") <|>
+      (U <$ kw "U") <|>
+      (S <$ kw "S")
+
 pi :: Parser Term
 pi = go <$> try (some binder) <* arr <*> term where
-  go dom cod = foldr (\(xs, a, i) t -> foldr (\x -> Pi x i a) t xs) cod dom
-  binder = braces ((,,Implicit) <$> some bind <*> ((colon *> term) <|> pure Hole))
-       <|> parens ((,,Explicit) <$> some bind <* colon <*> term)
+  go dom cod = foldr (\(q, xs, a, i) t -> foldr (\x -> Pi q x i a) t xs) cod dom
+  binder = try (braces ((Nothing,,,Implicit) <$> some bind <*> pure Hole))
+       <|> try (braces ((,,,Implicit) <$> (Just <$> qty) <*> some bind <* colon <*> term))
+       <|> braces ((Nothing,,,Implicit) <$> some bind <* colon <*> term)
+       <|> try (parens ((,,,Explicit) <$> (Just <$> qty) <*> some bind <* colon <*> term))
+       <|> parens ((Nothing,,,Explicit) <$> some bind <* colon <*> term)
 
 term :: Parser Term
-term = loc (lam <|> let_ <|> pi <|> (spine >>= \s -> (arr >> Pi underscore Explicit s <$> term) <|> pure s))
+term = loc (lam <|> let_ <|> pi <|> (spine >>= \s -> (arr >> Pi Nothing underscore Explicit s <$> term) <|> pure s))
 
 src :: Parser Term
 src = whitespace *> term <* eof

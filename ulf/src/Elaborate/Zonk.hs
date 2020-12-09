@@ -48,15 +48,15 @@ zonk vs t0 = go t0 where
 #ifdef FCIF
       _          -> panic
 #endif
-    U            -> pure U
-    Pi x i q a b   -> Pi x i q <$> go a <*> goBind b
-    App ni t1 u   -> goSp t1 >>= \case
+    U_           -> pure U_
+    Pi x i q a b -> Pi x i q <$> go a <*> goBind b
+    App ni t1 u  -> goSp t1 >>= \case
       Left t  -> do
         u' <- eval vs u
         t' <- evalApp ni t u'
         uneval (valsLen vs) t'
       Right t -> App ni t <$> go u
-    Lam x i a t  -> Lam x i <$> go a <*> goBind t
+    Lam x i q a t -> Lam x i q <$> go a <*> goBind t
     Let x a t u  -> Let x <$> go a <*> go t <*> goBind u
     Skip t       -> Skip <$> goBind t
 #ifdef FCIF
@@ -79,5 +79,5 @@ zonk vs t0 = go t0 where
         a' <- go a
         u' <- go u
         pure $ AppTel a' t u'
-    LamTel x a b -> LamTel x <$> go a <*> goBind b
+    LamTel x q a b -> LamTel x q <$> go a <*> goBind b
 #endif

@@ -32,9 +32,9 @@ library
   hs-source-dirs: src
   include-dirs: cbits
   includes: ccadical.h
-  cc-options: -O3 -DNDEBUG
+  cxx-options: -O3 -DNDEBUG -DNBUILD -std=c++11
   extra-libraries: stdc++
-  c-sources:
+  cxx-sources:
     cbits/cadical/src/analyze.cpp
     cbits/cadical/src/arena.cpp
     cbits/cadical/src/assume.cpp

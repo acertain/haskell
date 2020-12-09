@@ -28,7 +28,7 @@
   (head   : {A} → List A → A)
   (tail   : {A} → List A → List A)
   (nil    : {A} → List A)
-  (cons   : {A} → A → List A → List A)
+  (cons   : {E A : U} → A → List A → List A)
   (append : {A} → List A → List A → List A)
   (length : {A} → List A → Int)
   (map    : {A B} → (A → B) → List A → List B)
@@ -40,7 +40,7 @@ let the    : (A : U) → A → A         = λ A a. a in
 let const  : {A B} → A → B → A       = λ x y. x in
 let IdTy   : U                       = {A} → A → A in
 let single : {A} → A → List A        = λ a. cons a nil in
-let id     : {A} → A → A             = λ a. a in
+let id     : IdTy                    = λ a. a in
 let ids    : List IdTy               = nil in
 let app    : {A B} → (A → B) → A → B = id in
 let revapp : {A B} → A → (A → B) → B = λ x f. f x in

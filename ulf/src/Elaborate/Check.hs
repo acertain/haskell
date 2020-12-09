@@ -49,8 +49,8 @@ insert' cxt act = do
 --   an implicit lambda (i.e. neutral).
 insert :: GivenSolver => Context -> IO (Qtys, TM, VTy) -> IO (Qtys, TM, VTy)
 insert cxt act = act >>= \case
-  (qs, t@(Lam _ Implicit _ _), va) -> pure (qs, t, va)
-  (qs, t                     , va) -> insert' cxt (pure (qs, t, va))
+  (qs, t@(Lam _ Implicit _ _ _), va) -> pure (qs, t, va)
+  (qs, t                       , va) -> insert' cxt (pure (qs, t, va))
 
 
 expectFn :: GivenSolver => Context -> Raw.Term -> Icit -> IO (Qtys, TM, Qty, VTy, EVTy)
@@ -71,6 +71,7 @@ expectFn cxt tm i = do
       let x = metaName m'
       (_,c) <- freshMeta (bind x NOInserted a cxt) VU
       let b x' = eval (VDef (cxt^.vals) x') c
+      -- TODO: subusage here?
       q <- qtyVar
       unifyWhile cxt va' (VPi x i q a b)
       pure (qs1, t, q, a, b)
@@ -83,7 +84,7 @@ infer :: GivenSolver => Context -> Raw.Term -> IO (Qtys, TM, VTy)
 infer cxt = \case
   Raw.Loc p t -> addSourcePos p (infer cxt t)
 
-  Raw.U -> pure (zeroQtys (cxt ^. len), U, VU)
+  Raw.U_ -> pure (zeroQtys (cxt ^. len), U_, VU)
 
   Raw.Var x -> do
     let go :: [Name] -> [NameOrigin] -> Types -> Int -> IO (Qtys, TM, VTy)
@@ -93,11 +94,11 @@ infer cxt = \case
         go _ _ _ _ = panic
     go (cxt^.names) (cxt^.nameOrigin) (cxt^.types) 0
 
-  Raw.Pi x i a b -> do
+  Raw.Pi qt x i a b -> do
     (q1,a') <- check cxt a VU
     va <- eval (cxt^.vals) a'
     (q2,b') <- check (bind (sourceName x) NOSource va cxt) b VU
-    q <- qtyVar
+    q <- maybe qtyVar (pure . knownQty) qt
     pure (q1 <> tailQtys q2, Pi (sourceName x) i q a' b', VU)
 
   Raw.App i t0 u -> do
@@ -113,7 +114,9 @@ infer cxt = \case
     va <- eval (cxt^.vals) a
     let cxt' = bind x NOSource va cxt
     (qs, t', liftVal cxt -> b) <- insert cxt' $ infer cxt' t
-    pure (tailQtys qs, Lam x i a t', VPi x i (headQtys qs) va b)
+    q <- qtyVar
+    qtyLe (headQtys qs) q    
+    pure (tailQtys qs, Lam x i q a t', VPi x i q va b)
 
   Raw.Hole -> do
     (_,a) <- freshMeta cxt VU
@@ -145,14 +148,14 @@ check cxt topT ~topA0 = force topA0 >>= \ ftopA -> case (topT, ftopA) of
       ty <- b (VVar (cxt^.len))
       check (bind x NOSource a cxt) t0 ty
     qtyLe (headQtys qs) q
-    pure (tailQtys qs, Lam x i ann' t)
+    pure (tailQtys qs, Lam x i q ann' t)
 
   (t0, VPi x Implicit q a b) -> do
     ty <- b (VVar (cxt^.len))
     (qs,t) <- check (bind x NOInserted a cxt) t0 ty
     qtyLe (headQtys qs) q
     a' <- uneval (cxt^.len) a
-    pure (tailQtys qs, Lam x Implicit a' t)
+    pure (tailQtys qs, Lam x Implicit q a' t)
 
 #ifdef FCIF
   -- inserting a new curried function lambda
@@ -164,8 +167,9 @@ check cxt topT ~topA0 = force topA0 >>= \ ftopA -> case (topT, ftopA) of
     let cxt' = bind x NOInserted (VRec vdom) cxt
     (q2, t, liftVal cxt -> a) <- insert cxt' $ infer cxt' t0
     newConstancy cxt vdom a
+    -- TODO: subusage `headQtysS q2`?
     unifyWhile cxt topA0 (VPiTel x (headQtysS q2) vdom a)
-    pure (tailQtys q2, LamTel x d t)
+    pure (tailQtys q2, LamTel x (headQtysS q2) d t)
 #endif
 
   -- (Raw.Let (sourceName -> x) a0 t0 u0, topA) -> do

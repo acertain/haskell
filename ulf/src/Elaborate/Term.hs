@@ -40,6 +40,7 @@ import Numeric.Lens
 import Data.Data
 import Common.Qty
 import Solver.Sat.CaDiCaL (solve)
+import Data.List (nub)
 
 type Ty = Tm
 type Ix = Int
@@ -48,7 +49,7 @@ data Tm a
   = Var !Ix                            -- ^ x
   | Let !Name !(Ty a) !(Tm a) !(Tm a)  -- ^ let x : A = t in u
   | Pi !Name !Icit !Qty !(Ty a) !(Ty a)     -- ^ (x : A) → B)  or  {x : A} → B
-  | Lam !Name !Icit !(Ty a) !(Tm a)    -- ^ λ(x : A).t  or  λ{x : A}.t
+  | Lam !Name !Icit !Qty !(Ty a) !(Tm a)    -- ^ λ(x : A).t  or  λ{x : A}.t
   | App !Icit (Tm a) !(Tm a)           -- ^ t u  or  t {u}
 #ifdef FCIF
   | Tel                                -- ^ Tel
@@ -61,9 +62,9 @@ data Tm a
   | Cdr !(Tm a)                        -- ^ π₂ t
   | PiTel !Name !SQtys !(Ty a) !(Ty a) -- ^ {x : A⃗} → B
   | AppTel !(Ty a) !(Tm a) !(Tm a)     -- ^ t {u : A⃗}
-  | LamTel !Name !(Ty a) !(Tm a)       -- ^ λ{x : A⃗}.t
+  | LamTel !Name !SQtys !(Ty a) !(Tm a)       -- ^ λ{x : A⃗}.t
 #endif
-  | U                                  -- ^ U
+  | U_                                 -- ^ U
   | Meta a                             -- ^ α
   | Skip !(Tm a)                       -- ^ explicit weakening for closing types
   deriving (Functor,Foldable,Traversable,Data)
@@ -112,24 +113,28 @@ spine ns (Meta m) =
 spine ns t =
   (tm atomp ns t, False)
 
-lamBind :: ShowCtx => Name -> Icit -> ShowS
-lamBind x i = icit i bracket id ((if null (name x "") then ("_"++) else name x))
+lamBind :: ShowCtx => [Name] -> Name -> Maybe Qty -> Icit -> Tm Name -> ShowS
+lamBind ns x q i a = icit i bracket (showParen True) $ case q >>= \qv -> HM.lookup qv ?qtysMap of
+  Nothing -> (("? "++) . name x . (" : "++) . tm tmp ns a)
+  Just q' -> ((show q'++) . (" "++) . name x . (" : "++) . tm tmp ns a)
+
+  -- icit i bracket id ((if null (name x "") then ("_"++) else name x))
 
 lamTelBind :: ShowCtx => [Name] -> Name -> Tm Name -> ShowS
 lamTelBind ns x a = bracket (name x.(" : "++).tm tmp ns a)
 
 lams :: ShowCtx => [Name] -> Tm Name -> ShowS
-lams ns (Lam (fresh ns -> x) i a t) =
-  (' ':) . lamBind x i . lams (x:ns) t
-lams ns (LamTel (fresh ns -> x) a t) =
+lams ns (Lam (fresh ns -> x) i q a t) =
+  (' ':) . lamBind ns x (Just q) i a . lams (x:ns) t
+lams ns (LamTel (fresh ns -> x) _ a t) =
   (' ':) . lamTelBind ns x a . lams (x:ns) t
 lams ns t =
   (". "++) . tm tmp ns t
 
 piBind :: ShowCtx => [Name] -> Name -> Maybe Qty -> Icit -> Tm Name -> ShowS
-piBind ns x q i a = case q >>= \qv -> HM.lookup qv ?qtysMap of
-  Nothing -> icit i bracket (showParen True) (("? "++) . name x . (" : "++) . tm tmp ns a)
-  Just q' -> icit i bracket (showParen True) ((show q'++) . (" "++) . name x . (" : "++) . tm tmp ns a)
+piBind ns x q i a = icit i bracket (showParen True) $ case q >>= \qv -> HM.lookup qv ?qtysMap of
+  Nothing -> (("? "++) . name x . (" : "++) . tm tmp ns a)
+  Just q' -> ((show q'++) . (" "++) . name x . (" : "++) . tm tmp ns a)
 
 pi :: ShowCtx => [Name] -> Tm Name -> ShowS
 pi ns (Pi (fresh ns -> x) i q a b)  | x /= "_" = piBind ns x (Just q) i a . pi (x:ns) b
@@ -153,15 +158,15 @@ tm p ns = \case
     par appp p $ fst $ spine ns t
   t@AppTel{} ->
     par appp p $ fst $ spine ns t
-  Lam x i a t ->
-    par tmp p $ ("λ "++) . lamBind x i . lams (x:ns) t
+  Lam x i q a t ->
+    par tmp p $ ("λ "++) . lamBind ns x (Just q) i a . lams (x:ns) t
 
   -- Pi "_" Expl a b ->
   --   par tmp p $ tm recp ns a . (" → "++) . tm tmp ("_":ns) b
   Pi (fresh ns -> x) i q a b ->
     par tmp p $ piBind ns x (Just q) i a . pi (x:ns) b
 
-  U      -> ("U"++)
+  U_     -> ("U"++)
   Tel    -> ("Tel"++)
   TNil -> ("ε"++)
 
@@ -182,7 +187,7 @@ tm p ns = \case
   --   par tmp p $ tm recp ns a . (" → "++) . tm tmp ("_":ns) b
   PiTel (fresh ns -> x) _ a b ->
     par tmp p $ piBind ns x Nothing Implicit a . pi (x:ns) b
-  LamTel (fresh ns -> x) a t ->
+  LamTel (fresh ns -> x) _ a t ->
     par tmp p $ ("λ"++) . lamTelBind ns x a . lams (x:ns) t
 
   Skip t -> tm p ("_":ns) t
@@ -235,6 +240,7 @@ showTmIO ns t = do
   let ?naming = n
   _ <- solve
   qs <- readQtys t'
+  putStrLn $ "Used qtys: " ++ show (nub (fmap snd $ HM.toList qs))
   let ?qtysMap = qs
   pure $ tm tmp ns t' []
 

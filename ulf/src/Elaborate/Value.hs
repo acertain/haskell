@@ -130,7 +130,7 @@ type VTy = Val
 data Val
   = VNe !Head !Spine
   | VPi !Name !Icit !Qty VTy EVTy
-  | VLam !Name !Icit VTy EVal
+  | VLam !Name !Icit !Qty VTy EVal
   | VU
 #ifdef FCIF
   | VTel
@@ -140,7 +140,7 @@ data Val
   | VTnil
   | VTcons Val Val
   | VPiTel !Name !SQtys Val EVal
-  | VLamTel !Name Val EVal
+  | VLamTel !Name !SQtys Val EVal
 #endif
 
 type EVal = Val -> IO Val

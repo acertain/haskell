@@ -10,15 +10,16 @@ module Source.Term where
 
 import Common.Icit
 import Common.Names
+import Common.Qty
 import Text.Megaparsec (SourcePos)
 
 data Term
   = Var !SourceName
   | Lam !SourceName !(Maybe Term) !Icit !Term
   | App !Icit !Term !Term
-  | Pi  !SourceName !Icit !Term !Term
+  | Pi !(Maybe Q) !SourceName !Icit !Term !Term
   | Let !SourceName !Term !Term !Term
-  | U
+  | U_
   | Hole
   | Loc !SourcePos !Term
   deriving (Show)

@@ -13,7 +13,7 @@
 module Common.Qty (
   GivenSolver, runSolver,
 
-  Q, Qty, knownQty, zeroQty, oneQty, mulQty, addQty,
+  Q(..), Qty, knownQty, zeroQty, oneQty, mulQty, addQty,
 
   qtyVar, qtyVal, qtyEq, qtyLe, qtysLe,
 
@@ -40,13 +40,12 @@ import {-# SOURCE #-} Elaborate.Error
 type GivenSolver = (GivenSAT, ?cachedStableMap :: IORef (HM.HashMap (StableName ()) Any))
 
 runSolver :: (GivenSolver => IO a) -> IO a
-runSolver x = withSolverOpts [("lucky",0)] do
-  --,("profile",3),("inprocessing",0),("decompose",0),("elim",0),("verbose",4)] $ do
+runSolver x = withSolverOpts [("lucky",0),("profile",3),("inprocessing",0),("decompose",0),("elim",0)] $ do
   r <- newIORef mempty
   let ?cachedStableMap = r
   x
 
-data Q = E | L | A | R | U_ | S deriving (Show)
+data Q = E | L | A | R | U | S deriving (Show, Data, Eq)
 
 data Qty = Qty !Bit !Bit !Bit
   deriving (Data, Show, Eq, Hashable, Generic)
@@ -171,7 +170,7 @@ knownQty = \case
   E -> Qty z o z
   L -> Qty o o o
   A -> Qty z z o
-  U_ -> Qty z z z
+  U -> Qty z z z
   S -> Qty o z z
   R -> Qty o o z
   where 
@@ -198,7 +197,7 @@ qtyVal (Qty x y z) = (liftA3 (,,) <$> evalBit x <*> evalBit y <*> evalBit z) <&>
   (False, True, False)  -> E
   (True, True, True)    -> L
   (False, False, True)  -> A
-  (False, False, False) -> U_
+  (False, False, False) -> U
   (True, False, False)  -> S
   (True, True, False)   -> R
   _                     -> error "impossible"

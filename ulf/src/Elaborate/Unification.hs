@@ -185,9 +185,9 @@ strengthen str0 = go where
                             VNe (HMeta m') sp' -> goSp (Meta m') sp'
                             _ -> panic
 
-    VPi x i q a b     -> Pi x i q <$> go a <*> goBind b
-    VLam x i a t'    -> Lam x i <$> go a <*> goBind t'
-    VU               -> pure U
+    VPi x i q a b    -> Pi x i q <$> go a <*> goBind b
+    VLam x i q a t'  -> Lam x i q <$> go a <*> goBind t'
+    VU               -> pure U_
 #ifdef FCIF
     VTel             -> pure Tel
     VRec a           -> Rec <$> go a
@@ -196,7 +196,7 @@ strengthen str0 = go where
     VTnil            -> pure Tnil
     VTcons t' u      -> Tcons <$> go t' <*> go u
     VPiTel x q a b   -> PiTel x q <$> go a <*> goBind b
-    VLamTel x a t'   -> LamTel x <$> go a <*> goBind t'
+    VLamTel x q a t' -> LamTel x q <$> go a <*> goBind t'
 #endif
 
   goBind :: EVal -> IO TM
@@ -253,12 +253,12 @@ closingTm = go 0 EmptyQtys TyNil where
     VPi (getName xs -> x) i q a b  -> do
       a' <- b (VVar d) 
       bd <- uneval d a 
-      Lam x i bd <$> go (d + 1) (SnocQty qs q) (TySnoc ts Bound a) a' (l-1) (drop 1 xs) rhs
+      Lam x i q bd <$> go (d + 1) (SnocQty qs q) (TySnoc ts Bound a) a' (l-1) (drop 1 xs) rhs
 #ifdef FCIF
     VPiTel (getName xs -> x) q a b -> do
       a' <- b (VVar d)
       bd <- uneval d a
-      LamTel x bd <$> go (d + 1) (SnocSQtys qs q) (TySnoc ts Bound (VRec a)) a' (l-1) (drop 1 xs) rhs
+      LamTel x q bd <$> go (d + 1) (SnocSQtys qs q) (TySnoc ts Bound (VRec a)) a' (l-1) (drop 1 xs) rhs
 #endif
     _ -> panic
 
@@ -409,9 +409,9 @@ unify cxt l r = go l r where
 
   go :: Val -> Val -> IO ()
   go t0 t0' = ((,) <$> force t0 <*> force t0') >>= \case
-    (VLam x _ a t, VLam _ _ _ t')            -> goBind x a t t'
-    (VLam x i a t, t')                       -> goBind x a t \ v -> evalApp i t' v
-    (t, VLam x' i' a' t')                    -> goBind x' a' (\ v -> evalApp i' t v) t'
+    (VLam x _ _ a t, VLam _ _ _ _ t')        -> goBind x a t t'
+    (VLam x i _ a t, t')                     -> goBind x a t \ v -> evalApp i t' v
+    (t, VLam x' i' _ a' t')                  -> goBind x' a' (\ v -> evalApp i' t v) t'
     (VPi x i q a b, VPi _ i' q' a' b') | i == i' -> qtyEq q q' >> go a a' >> goBind x a b b'
     (VU, VU)                                 -> pure ()
 #ifdef FCIF
@@ -423,9 +423,9 @@ unify cxt l r = go l r where
     (VTcons t u, VTcons t' u')               -> go t t' >> go u u'
     (VPiTel x q a b, VPiTel _ q' a' b')      -> sQtysEq q q' >> go a a' >> goBind x (VRec a) b b'
     -- TODO: unify a a'?
-    (VLamTel x a t, VLamTel _  _ t')         -> goBind x (VRec a) t t'
-    (VLamTel x a t, t')                      -> goBind x (VRec a) t (evalAppTel a t')
-    (t, VLamTel x' a' t')                    -> goBind x' (VRec a') (evalAppTel a' t) t'
+    (VLamTel x _ a t, VLamTel _ _ _ t')      -> goBind x (VRec a) t t'
+    (VLamTel x _ a t, t')                    -> goBind x (VRec a) t (evalAppTel a t')
+    (t, VLamTel x' _ a' t')                  -> goBind x' (VRec a') (evalAppTel a' t) t'
 #endif
     (VNe h sp, VNe h' sp') | h == h'         -> do
       fsp <- forceSp sp 
@@ -541,7 +541,7 @@ inferQtys tys !tl m = \case
     y' <- y (VVar tl)
     qs <- inferQtys (TySnoc tys Bound x) (tl+1) m y'
     (<>) (tailQtys qs) <$> inferQtys tys tl m x
-  VLam _ _ x y -> do
+  VLam _ _ _ x y -> do
     y' <- y (VVar tl)
     tailQtys <$> inferQtys (TySnoc tys Bound x) (tl+1) m y'
   VU -> pure $ zeroQtys tl
@@ -559,7 +559,7 @@ inferQtys tys !tl m = \case
     y' <- y (VVar tl)
     qs <- inferQtys (TySnoc tys Bound (VRec x)) (tl+1) m y'
     (<>) (tailQtys qs) <$> inferQtys tys tl m x    
-  VLamTel _ x b -> undefined
+  VLamTel _ _ x b -> undefined
 
 
 
